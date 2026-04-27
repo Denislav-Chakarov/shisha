@@ -1,0 +1,38 @@
+<?php
+
+use App\Http\Controllers\Auth\LoginController;
+use App\Http\Controllers\DashboardController;
+use Illuminate\Support\Facades\Route;
+
+Route::get('/', function () {
+    return auth()->check()
+        ? redirect()->route('dashboard')
+        : redirect()->route('login');
+});
+
+Route::middleware('guest')->group(function () {
+    Route::get('/login', [LoginController::class, 'show'])->name('login');
+    Route::post('/login', [LoginController::class, 'authenticate'])->name('login.submit');
+});
+
+Route::middleware('auth')->group(function () {
+    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+    Route::get('/dashboard/workers-presence', [DashboardController::class, 'workersPresence'])->name('dashboard.workers_presence');
+    Route::get('/reports', [DashboardController::class, 'reports'])->name('reports');
+    Route::get('/products', [DashboardController::class, 'products'])->name('products');
+    Route::get('/tables', [DashboardController::class, 'tables'])->name('tables');
+    Route::post('/dashboard/brands', [DashboardController::class, 'addBrand'])->name('dashboard.brands.store');
+    Route::post('/dashboard/products', [DashboardController::class, 'addProduct'])->name('dashboard.products.store');
+    Route::get('/dashboard/products/image-suggestions', [DashboardController::class, 'imageSuggestions'])->name('dashboard.products.image_suggestions');
+    Route::put('/dashboard/products/{productId}', [DashboardController::class, 'updateProduct'])->name('dashboard.products.update');
+    Route::delete('/dashboard/products/{productId}', [DashboardController::class, 'deleteProduct'])->name('dashboard.products.delete');
+    Route::post('/dashboard/hookah-recipes', [DashboardController::class, 'addHookahRecipe'])->name('dashboard.hookah_recipes.store');
+    Route::post('/dashboard/tables/layout', [DashboardController::class, 'setTableCount'])->name('dashboard.tables.layout');
+    Route::post('/dashboard/tables/{tableId}/toggle', [DashboardController::class, 'toggleTable'])->name('dashboard.tables.toggle');
+    Route::post('/dashboard/tables/{tableId}/status', [DashboardController::class, 'setTableStatus'])->name('dashboard.tables.status');
+    Route::post('/dashboard/tables/{tableId}/reservations', [DashboardController::class, 'createReservation'])->name('dashboard.tables.reservations.store');
+    Route::post('/dashboard/orders/items', [DashboardController::class, 'addOrderItem'])->name('dashboard.orders.items.store');
+    Route::post('/dashboard/orders/ai', [DashboardController::class, 'aiAddOrder'])->name('dashboard.orders.ai');
+    Route::post('/dashboard/orders/close', [DashboardController::class, 'closeOrder'])->name('dashboard.orders.close');
+    Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
+});
