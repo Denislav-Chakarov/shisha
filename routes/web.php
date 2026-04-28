@@ -26,6 +26,10 @@ Route::middleware('auth')->group(function () {
     Route::get('/dashboard/products/image-suggestions', [DashboardController::class, 'imageSuggestions'])->name('dashboard.products.image_suggestions');
     Route::put('/dashboard/products/{productId}', [DashboardController::class, 'updateProduct'])->name('dashboard.products.update');
     Route::delete('/dashboard/products/{productId}', [DashboardController::class, 'deleteProduct'])->name('dashboard.products.delete');
+    Route::post('/dashboard/products/{productId}/tobacco-pack-purchases', [DashboardController::class, 'storeTobaccoPackPurchase'])->name('dashboard.products.tobacco_pack_purchases.store');
+    Route::put('/dashboard/products/{productId}/tobacco-pack-purchases/{purchaseId}', [DashboardController::class, 'updateTobaccoPackPurchase'])->name('dashboard.products.tobacco_pack_purchases.update');
+    Route::delete('/dashboard/products/{productId}/tobacco-pack-purchases/{purchaseId}', [DashboardController::class, 'deleteTobaccoPackPurchase'])->name('dashboard.products.tobacco_pack_purchases.destroy');
+    Route::put('/dashboard/products/{productId}/tobacco-pack-inventory/{inventoryId}', [DashboardController::class, 'updateTobaccoPackInventory'])->name('dashboard.products.tobacco_pack_inventory.update');
     Route::post('/dashboard/hookah-recipes', [DashboardController::class, 'addHookahRecipe'])->name('dashboard.hookah_recipes.store');
     Route::post('/dashboard/tables/layout', [DashboardController::class, 'setTableCount'])->name('dashboard.tables.layout');
     Route::post('/dashboard/tables/{tableId}/toggle', [DashboardController::class, 'toggleTable'])->name('dashboard.tables.toggle');

@@ -10,6 +10,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
@@ -44,6 +45,7 @@ class DashboardController extends Controller
                 'products.category',
                 'products.flavor',
                 'products.price',
+                'products.purchase_price',
                 'products.stock_quantity',
                 'products.unit',
                 'products.image_path',
@@ -75,7 +77,28 @@ class DashboardController extends Controller
 
         $filteredProducts = $query->paginate(8)->withQueryString();
 
+        $tobaccoPackPurchasesByProduct = collect();
+        $pageProductIds = $filteredProducts->pluck('id')->all();
+        if ($pageProductIds !== []) {
+            $tobaccoPackPurchasesByProduct = DB::table('tobacco_pack_purchases')
+                ->whereIn('product_id', $pageProductIds)
+                ->orderByDesc('restocked_at')
+                ->orderByDesc('id')
+                ->get()
+                ->groupBy(fn ($row) => (int) $row->product_id);
+
+            $tobaccoPackInventoryByProduct = DB::table('tobacco_pack_inventory')
+                ->whereIn('product_id', $pageProductIds)
+                ->orderBy('pack_grams')
+                ->get()
+                ->groupBy(fn ($row) => (int) $row->product_id);
+        } else {
+            $tobaccoPackInventoryByProduct = collect();
+        }
+
         $data['filteredProducts'] = $filteredProducts;
+        $data['tobaccoPackPurchasesByProduct'] = $tobaccoPackPurchasesByProduct;
+        $data['tobaccoPackInventoryByProduct'] = $tobaccoPackInventoryByProduct;
         $data['filters'] = [
             'q' => $search,
             'category' => $category,
@@ -236,6 +259,7 @@ class DashboardController extends Controller
                 'products.category',
                 'products.flavor',
                 'products.price',
+                'products.purchase_price',
                 'products.stock_quantity',
                 'products.unit',
                 'products.image_path',
@@ -450,8 +474,14 @@ class DashboardController extends Controller
                 'brand_id' => ['required', 'integer', 'exists:brands,id'],
                 'category' => ['required', 'in:tobacco,drink,hookah'],
                 'name' => ['nullable', 'string', 'max:255'],
-                'price' => ['nullable', 'numeric', 'min:0'],
-                'stock_quantity' => ['required', 'integer', 'min:0'],
+                'purchase_price' => ['nullable', 'numeric', 'min:0'],
+                'sale_price' => ['nullable', 'numeric', 'min:0'],
+                'stock_quantity' => [
+                    Rule::requiredIf(static fn () => $request->input('category') !== 'tobacco'),
+                    'nullable',
+                    'integer',
+                    'min:0',
+                ],
                 'unit' => ['nullable', 'string', 'max:20'],
                 'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:4096'],
                 'selected_image_path' => ['nullable', 'string', 'max:512'],
@@ -488,18 +518,32 @@ class DashboardController extends Controller
                 $imagePath = 'storage/' . $stored;
             }
 
-            $price = $category === 'tobacco' ? 0 : (float) ($validated['price'] ?? 0);
+            $purchase = (float) ($validated['purchase_price'] ?? 0);
+            $saleRaw = $validated['sale_price'] ?? null;
+            $sale = ($saleRaw === null || $saleRaw === '')
+                ? ($category === 'tobacco' ? 0.0 : $purchase)
+                : (float) $saleRaw;
             $unit = $category === 'tobacco'
                 ? 'g'
                 : trim((string) ($validated['unit'] ?? 'бр'));
+
+            if ($category === 'tobacco') {
+                $purchase = 0.0;
+                $sale = 0.0;
+            }
+
+            $stockQty = $category === 'tobacco'
+                ? 0
+                : (int) $validated['stock_quantity'];
 
             DB::table('products')->insert([
                 'brand_id' => $validated['brand_id'],
                 'category' => $category,
                 'name' => $productName,
                 'flavor' => null,
-                'price' => $price,
-                'stock_quantity' => $validated['stock_quantity'],
+                'price' => $sale,
+                'purchase_price' => $purchase,
+                'stock_quantity' => $stockQty,
                 'unit' => $unit,
                 'image_path' => $imagePath,
                 'is_active' => array_key_exists('is_active', $validated) ? $request->boolean('is_active') : true,
@@ -527,8 +571,15 @@ class DashboardController extends Controller
                 'brand_id' => ['required', 'integer', 'exists:brands,id'],
                 'category' => ['required', 'in:tobacco,drink,hookah'],
                 'name' => ['nullable', 'string', 'max:255'],
-                'price' => ['nullable', 'numeric', 'min:0'],
-                'stock_quantity' => ['required', 'integer', 'min:0'],
+                'purchase_price' => ['nullable', 'numeric', 'min:0'],
+                'sale_price' => ['nullable', 'numeric', 'min:0'],
+                'stock_quantity' => [
+                    Rule::requiredIf(static fn () => $request->input('category') !== 'tobacco'),
+                    'nullable',
+                    'integer',
+                    'min:0',
+                ],
+                'restock_add' => ['nullable', 'integer', 'min:0'],
                 'unit' => ['nullable', 'string', 'max:20'],
                 'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:4096'],
                 'selected_image_path' => ['nullable', 'string', 'max:512'],
@@ -566,18 +617,40 @@ class DashboardController extends Controller
                 $imagePath = 'storage/' . $stored;
             }
 
-            $price = $category === 'tobacco' ? 0 : (float) ($validated['price'] ?? 0);
+            $purchase = (float) ($validated['purchase_price'] ?? 0);
+            $saleRaw = $validated['sale_price'] ?? null;
+            $sale = ($saleRaw === null || $saleRaw === '')
+                ? (float) ($product->price ?? 0)
+                : (float) $saleRaw;
             $unit = $category === 'tobacco'
                 ? 'g'
                 : trim((string) ($validated['unit'] ?? 'бр'));
+
+            if ($category === 'tobacco') {
+                $purchase = 0.0;
+                $sale = 0.0;
+            }
+
+            if ($category !== 'tobacco') {
+                DB::table('tobacco_pack_inventory')->where('product_id', $productId)->delete();
+            }
+
+            if ($category === 'tobacco') {
+                $finalStock = $this->sumTobaccoInventoryGrams($productId);
+            } else {
+                $baseStock = (int) ($validated['stock_quantity'] ?? 0);
+                $restockAdd = (int) ($validated['restock_add'] ?? 0);
+                $finalStock = $baseStock + $restockAdd;
+            }
 
             DB::table('products')->where('id', $productId)->update([
                 'brand_id' => $validated['brand_id'],
                 'category' => $category,
                 'name' => $productName,
                 'flavor' => null,
-                'price' => $price,
-                'stock_quantity' => $validated['stock_quantity'],
+                'price' => $sale,
+                'purchase_price' => $purchase,
+                'stock_quantity' => $finalStock,
                 'unit' => $unit,
                 'image_path' => $imagePath,
                 'is_active' => $request->boolean('is_active'),
@@ -602,6 +675,195 @@ class DashboardController extends Controller
         DB::table('products')->where('id', $productId)->delete();
 
         return back()->with('status', 'Продуктът е изтрит успешно.');
+    }
+
+    public function storeTobaccoPackPurchase(Request $request, int $productId): RedirectResponse
+    {
+        $product = DB::table('products')->where('id', $productId)->first();
+        if ($product === null || $product->category !== 'tobacco') {
+            return back()->with('error', 'Зареждания се записват само за продукти от категория „Тютюн“.');
+        }
+
+        $validated = $request->validate([
+            'restocked_at' => ['required', 'date'],
+            'pack_grams' => ['required', 'integer', 'min:1', 'max:500000'],
+            'boxes_count' => ['required', 'integer', 'min:1', 'max:500000'],
+            'purchase_price_per_box' => ['required', 'numeric', 'min:0'],
+        ]);
+
+        $boxes = (int) $validated['boxes_count'];
+        $packGrams = (int) $validated['pack_grams'];
+
+        DB::transaction(function () use ($productId, $validated, $boxes, $packGrams): void {
+            DB::table('tobacco_pack_purchases')->insert([
+                'product_id' => $productId,
+                'restocked_at' => $validated['restocked_at'],
+                'pack_grams' => $packGrams,
+                'boxes_count' => $boxes,
+                'purchase_price_per_box' => (float) $validated['purchase_price_per_box'],
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            $this->adjustTobaccoInventoryBoxes($productId, $packGrams, $boxes);
+            $this->recalculateTobaccoProductStockFromInventory($productId);
+        });
+
+        return back()->with('status', 'Зареждането е записано; наличните кутии и общият грамаж са обновени.');
+    }
+
+    public function updateTobaccoPackPurchase(Request $request, int $productId, int $purchaseId): RedirectResponse
+    {
+        $product = DB::table('products')->where('id', $productId)->first();
+        if ($product === null || $product->category !== 'tobacco') {
+            return back()->with('error', 'Невалиден продукт.');
+        }
+
+        $existing = DB::table('tobacco_pack_purchases')
+            ->where('id', $purchaseId)
+            ->where('product_id', $productId)
+            ->first();
+
+        if ($existing === null) {
+            return back()->with('error', 'Записът за зареждане не е намерен.');
+        }
+
+        $validated = $request->validate([
+            'restocked_at' => ['required', 'date'],
+            'pack_grams' => ['required', 'integer', 'min:1', 'max:500000'],
+            'boxes_count' => ['required', 'integer', 'min:1', 'max:500000'],
+            'purchase_price_per_box' => ['required', 'numeric', 'min:0'],
+        ]);
+
+        $oldPack = (int) $existing->pack_grams;
+        $oldBoxes = (int) $existing->boxes_count;
+        $newPack = (int) $validated['pack_grams'];
+        $newBoxes = (int) $validated['boxes_count'];
+
+        DB::transaction(function () use ($productId, $purchaseId, $validated, $oldPack, $oldBoxes, $newPack, $newBoxes): void {
+            $this->adjustTobaccoInventoryBoxes($productId, $oldPack, -$oldBoxes);
+            $this->adjustTobaccoInventoryBoxes($productId, $newPack, $newBoxes);
+
+            DB::table('tobacco_pack_purchases')
+                ->where('id', $purchaseId)
+                ->where('product_id', $productId)
+                ->update([
+                    'restocked_at' => $validated['restocked_at'],
+                    'pack_grams' => $newPack,
+                    'boxes_count' => $newBoxes,
+                    'purchase_price_per_box' => (float) $validated['purchase_price_per_box'],
+                    'updated_at' => now(),
+                ]);
+
+            $this->recalculateTobaccoProductStockFromInventory($productId);
+        });
+
+        return back()->with('status', 'Доставката е обновена; наличността е преизчислена.');
+    }
+
+    public function deleteTobaccoPackPurchase(int $productId, int $purchaseId): RedirectResponse
+    {
+        $product = DB::table('products')->where('id', $productId)->first();
+        if ($product === null || $product->category !== 'tobacco') {
+            return back()->with('error', 'Невалиден продукт.');
+        }
+
+        $row = DB::table('tobacco_pack_purchases')
+            ->where('id', $purchaseId)
+            ->where('product_id', $productId)
+            ->first();
+
+        if ($row === null) {
+            return back()->with('error', 'Записът за зареждане не е намерен.');
+        }
+
+        DB::transaction(function () use ($productId, $purchaseId, $row): void {
+            $this->adjustTobaccoInventoryBoxes($productId, (int) $row->pack_grams, -(int) $row->boxes_count);
+            DB::table('tobacco_pack_purchases')
+                ->where('id', $purchaseId)
+                ->where('product_id', $productId)
+                ->delete();
+            $this->recalculateTobaccoProductStockFromInventory($productId);
+        });
+
+        return back()->with('status', 'Записът за зареждане е изтрит; наличността е преизчислена.');
+    }
+
+    public function updateTobaccoPackInventory(Request $request, int $productId, int $inventoryId): RedirectResponse
+    {
+        $product = DB::table('products')->where('id', $productId)->first();
+        if ($product === null || $product->category !== 'tobacco') {
+            return back()->with('error', 'Невалиден продукт.');
+        }
+
+        $validated = $request->validate([
+            'boxes_on_hand' => ['required', 'integer', 'min:0', 'max:500000'],
+        ]);
+
+        $updated = DB::table('tobacco_pack_inventory')
+            ->where('id', $inventoryId)
+            ->where('product_id', $productId)
+            ->update([
+                'boxes_on_hand' => (int) $validated['boxes_on_hand'],
+                'updated_at' => now(),
+            ]);
+
+        if ($updated === 0) {
+            return back()->with('error', 'Редът за наличност не е намерен.');
+        }
+
+        $this->recalculateTobaccoProductStockFromInventory($productId);
+
+        return back()->with('status', 'Наличните кутии са обновени; общият грамаж е преизчислен.');
+    }
+
+    private function adjustTobaccoInventoryBoxes(int $productId, int $packGrams, int $delta): void
+    {
+        if ($delta === 0) {
+            return;
+        }
+
+        $existing = DB::table('tobacco_pack_inventory')
+            ->where('product_id', $productId)
+            ->where('pack_grams', $packGrams)
+            ->first();
+
+        if ($existing !== null) {
+            $newBoxes = max(0, (int) $existing->boxes_on_hand + $delta);
+            DB::table('tobacco_pack_inventory')
+                ->where('id', $existing->id)
+                ->update([
+                    'boxes_on_hand' => $newBoxes,
+                    'updated_at' => now(),
+                ]);
+        } elseif ($delta > 0) {
+            DB::table('tobacco_pack_inventory')->insert([
+                'product_id' => $productId,
+                'pack_grams' => $packGrams,
+                'boxes_on_hand' => $delta,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    }
+
+    private function sumTobaccoInventoryGrams(int $productId): int
+    {
+        return (int) DB::table('tobacco_pack_inventory')
+            ->where('product_id', $productId)
+            ->get()
+            ->sum(fn ($r) => (int) $r->pack_grams * (int) $r->boxes_on_hand);
+    }
+
+    private function recalculateTobaccoProductStockFromInventory(int $productId): void
+    {
+        $grams = $this->sumTobaccoInventoryGrams($productId);
+        DB::table('products')
+            ->where('id', $productId)
+            ->where('category', 'tobacco')
+            ->update([
+                'stock_quantity' => $grams,
+                'updated_at' => now(),
+            ]);
     }
 
     public function imageSuggestions(Request $request): JsonResponse

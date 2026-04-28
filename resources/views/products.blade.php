@@ -58,13 +58,33 @@
                     <input id="createProductName" type="text" name="name" placeholder="Име на продукт" required>
                     <input type="hidden" name="selected_image_path" id="selectedImagePath">
                     <div id="imageSuggestions" class="image-suggestions" style="display:none;"></div>
-                    <input type="number" step="0.01" min="0" name="price" placeholder="Цена (за напитки)">
-                    <input type="number" min="0" name="stock_quantity" placeholder="Наличност" required>
+                    <div id="createNontobaccoPriceFields">
+                        <input type="number" step="0.01" min="0" name="purchase_price" id="createPurchasePrice" placeholder="Пазарна цена (€)">
+                        <input type="number" step="0.01" min="0" name="sale_price" id="createSalePrice" placeholder="Продажна цена (€) — по избор">
+                    </div>
+                    <p id="createTobaccoHint" class="muted" style="display:none;margin:6px 0 0;">За тютюн: наличността се смята автоматично от кутиите по разфасовка (след „Редактирай“).</p>
+                    <div id="createStockWrap">
+                        <input type="number" min="0" name="stock_quantity" id="createStockQty" placeholder="Наличност" required>
+                    </div>
                     <input type="text" name="unit" value="бр" placeholder="Мерна единица (за напитки)">
                     <label for="image" class="file-picker">Качи снимка (JPG, PNG, WEBP)</label>
                     <input id="image" class="file-input" type="file" name="image" accept=".jpg,.jpeg,.png,.webp">
                     <div id="fileName" class="file-name">Няма избран файл</div>
                     <button class="btn" type="submit">Запази продукт</button>
+                </form>
+            </article>
+
+            <article class="panel">
+                <h2>Добавяне на бранд</h2>
+                <form method="POST" action="{{ route('dashboard.brands.store') }}">
+                    @csrf
+                    <input type="text" name="name" placeholder="Име на бранд" required maxlength="255">
+                    <select name="category" required>
+                        <option value="tobacco">Тютюн</option>
+                        <option value="drink">Напитка</option>
+                        <option value="hookah">Наргиле</option>
+                    </select>
+                    <button class="btn" type="submit">Запази бранд</button>
                 </form>
             </article>
         </section>
@@ -79,8 +99,8 @@
             </select>
             <select id="filterSort" name="sort">
                 <option value="name_asc" @selected(($filters['sort'] ?? 'name_asc') === 'name_asc')>По име</option>
-                <option value="price_asc" @selected(($filters['sort'] ?? '') === 'price_asc')>Цена възходящо</option>
-                <option value="price_desc" @selected(($filters['sort'] ?? '') === 'price_desc')>Цена низходящо</option>
+                <option value="price_asc" @selected(($filters['sort'] ?? '') === 'price_asc')>Продажна цена възходящо</option>
+                <option value="price_desc" @selected(($filters['sort'] ?? '') === 'price_desc')>Продажна цена низходящо</option>
                 <option value="stock_asc" @selected(($filters['sort'] ?? '') === 'stock_asc')>Наличност възходящо</option>
                 <option value="stock_desc" @selected(($filters['sort'] ?? '') === 'stock_desc')>Наличност низходящо</option>
             </select>
@@ -111,7 +131,28 @@
                         <div class="card-body">
                             <div class="title">{{ $product->name }}</div>
                             <div class="meta">{{ $product->brand_name }} • {{ $product->category === 'drink' ? 'Напитка' : ($product->category === 'hookah' ? 'Наргиле' : 'Тютюн') }}</div>
-                            <div class="row"><span>€{{ number_format($product->price, 2) }}</span><span>{{ $product->stock_quantity }} {{ $product->unit }}</span></div>
+                            @php
+                                $tpb = $tobaccoPackPurchasesByProduct ?? collect();
+                                $gridPurch = $tpb->get($product->id, collect());
+                                $gridLatest = $gridPurch->first();
+                            @endphp
+                            @if ($product->category === 'tobacco' && $gridLatest)
+                                <div class="row muted" style="font-size:0.85em;">
+                                    Последно зареждане: {{ \Illuminate\Support\Carbon::parse($gridLatest->restocked_at)->format('d.m.Y') }}
+                                    · {{ (int) $gridLatest->pack_grams }}g × {{ (int) $gridLatest->boxes_count }} кут.
+                                    · €{{ number_format((float) $gridLatest->purchase_price_per_box, 2) }}/кут.
+                                </div>
+                            @endif
+                            <div class="row">
+                                <span>
+                                    @if ($product->category === 'tobacco')
+                                        цени в зарежданията
+                                    @else
+                                        Прод. €{{ number_format($product->price, 2) }} · Паз. €{{ number_format($product->purchase_price ?? 0, 2) }}
+                                    @endif
+                                </span>
+                                <span>{{ $product->stock_quantity }} {{ $product->unit }}</span>
+                            </div>
                         </div>
                     </article>
                 @empty
@@ -138,8 +179,26 @@
                         <div class="info">
                             <strong>{{ $product->name }}</strong>
                             <span class="meta">{{ $product->brand_name }} • {{ $product->category === 'drink' ? 'Напитка' : ($product->category === 'hookah' ? 'Наргиле' : 'Тютюн') }}</span>
+                            @php
+                                $tpbList = $tobaccoPackPurchasesByProduct ?? collect();
+                                $listPurch = $tpbList->get($product->id, collect());
+                                $listLatest = $listPurch->first();
+                            @endphp
+                            @if ($product->category === 'tobacco' && $listLatest)
+                                <span class="meta" style="display:block;margin-top:4px;">
+                                    Последно: {{ \Illuminate\Support\Carbon::parse($listLatest->restocked_at)->format('d.m.Y') }}
+                                    · {{ (int) $listLatest->pack_grams }}g × {{ (int) $listLatest->boxes_count }} кут.
+                                    · €{{ number_format((float) $listLatest->purchase_price_per_box, 2) }}/кут.
+                                </span>
+                            @endif
                         </div>
-                        <div class="kpi"><div class="label">Цена</div><div class="value">€{{ number_format($product->price, 2) }}</div></div>
+                        @if ($product->category === 'tobacco')
+                            <div class="kpi"><div class="label">Цени</div><div class="value">—</div></div>
+                            <div class="kpi"><div class="label">Зареждане</div><div class="value">{{ $listLatest ? \Illuminate\Support\Carbon::parse($listLatest->restocked_at)->format('d.m') : '—' }}</div></div>
+                        @else
+                            <div class="kpi"><div class="label">Продажна</div><div class="value">€{{ number_format($product->price, 2) }}</div></div>
+                            <div class="kpi"><div class="label">Пазарна</div><div class="value">€{{ number_format($product->purchase_price ?? 0, 2) }}</div></div>
+                        @endif
                         <div class="kpi"><div class="label">Наличност</div><div class="value">{{ $product->stock_quantity }} {{ $product->unit }}</div></div>
                         <div class="actions">
                             <button type="button" class="btn-secondary" data-edit-toggle>Редактирай</button>
@@ -149,6 +208,12 @@
                             </form>
                         </div>
                         <div class="edit-panel" style="grid-column:1 / -1;">
+                            @php
+                                $tpbEdit = $tobaccoPackPurchasesByProduct ?? collect();
+                                $editPurchRows = $tpbEdit->get($product->id, collect());
+                                $tinvEdit = $tobaccoPackInventoryByProduct ?? collect();
+                                $editInvRows = $tinvEdit->get($product->id, collect());
+                            @endphp
                             <form method="POST" action="{{ route('dashboard.products.update', $product->id) }}" enctype="multipart/form-data">
                                 @csrf @method('PUT')
                                 <div class="edit-grid">
@@ -163,14 +228,136 @@
                                         @endforeach
                                     </select>
                                     <input type="text" name="name" value="{{ $product->name }}" required>
-                                    <input type="number" step="0.01" min="0" name="price" value="{{ $product->price }}">
-                                    <input type="number" min="0" name="stock_quantity" value="{{ $product->stock_quantity }}" required>
+                                    <div class="edit-nontobacco-prices" data-edit-nontobacco-prices style="{{ $product->category === 'tobacco' ? 'display:none;' : '' }}">
+                                        <input type="number" step="0.01" min="0" name="purchase_price" value="{{ $product->purchase_price ?? 0 }}" placeholder="Пазарна цена (€)">
+                                        <input type="number" step="0.01" min="0" name="sale_price" value="{{ $product->price }}" placeholder="Продажна цена (€)">
+                                    </div>
+                                    <div data-edit-stock-fields style="{{ $product->category === 'tobacco' ? 'display:none;' : '' }}">
+                                        <input type="number" min="0" name="stock_quantity" value="{{ $product->stock_quantity }}" required placeholder="Наличност">
+                                        <input type="number" min="0" name="restock_add" value="0" placeholder="Добави към наличност (+)">
+                                    </div>
                                     <input type="text" name="unit" value="{{ $product->unit }}">
                                     <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp">
                                     <label><input type="checkbox" name="is_active" value="1" @checked($product->is_active)> Активен</label>
                                     <button class="btn" type="submit">Запази промени</button>
                                 </div>
                             </form>
+                            @if ($product->category === 'tobacco')
+                                <p class="muted small mt-2 mb-0"><strong>Общо грамове (авто):</strong> {{ (int) $product->stock_quantity }} g — сума от разфасовка × налични кутии.</p>
+
+                                <details class="tobacco-inv-menu mt-3" open style="border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:10px;">
+                                    <summary class="h6 mb-0" style="cursor:pointer;">Наличност по разфасовки (кутии)</summary>
+                                    <p class="muted small mt-2 mb-2">Промяна на кутиите преизчислява общия грамаж. Нови разфасовки се появяват автоматично през „Доставки“.</p>
+                                    @if ($editInvRows->isEmpty())
+                                        <p class="muted small">Няма редове. Добави доставка, за да се появят разфасовки.</p>
+                                    @else
+                                        <div class="table-responsive mb-2">
+                                            <table class="table table-sm table-dark table-bordered align-middle mb-0">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Разфасовка</th>
+                                                        <th>Кутии налични</th>
+                                                        <th>Грамове (ред)</th>
+                                                        <th></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    @foreach ($editInvRows as $inv)
+                                                        <tr>
+                                                            <td>{{ (int) $inv->pack_grams }} g</td>
+                                                            <td>
+                                                                <form method="POST" action="{{ route('dashboard.products.tobacco_pack_inventory.update', [$product->id, $inv->id]) }}" class="d-flex gap-1 align-items-center flex-wrap">
+                                                                    @csrf @method('PUT')
+                                                                    <input type="number" name="boxes_on_hand" class="form-control form-control-sm" style="width:90px;" min="0" step="1" value="{{ (int) $inv->boxes_on_hand }}" required>
+                                                                    <button type="submit" class="btn btn-sm btn-outline-light py-0">OK</button>
+                                                                </form>
+                                                            </td>
+                                                            <td>{{ (int) $inv->pack_grams * (int) $inv->boxes_on_hand }} g</td>
+                                                            <td></td>
+                                                        </tr>
+                                                    @endforeach
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    @endif
+                                </details>
+
+                                <details class="tobacco-deliveries-menu mt-3" style="border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:10px;">
+                                    <summary class="h6 mb-0" style="cursor:pointer;">Доставки / зареждания</summary>
+                                    <p class="muted small mt-2 mb-2">Пазарна цена за кутия; при запис кутиите към съответната разфасовка се увеличават. Редакцията коригира и наличните кутии.</p>
+                                    @if ($editPurchRows->isEmpty())
+                                        <p class="muted small mb-2">Няма записани доставки.</p>
+                                    @else
+                                        <div class="table-responsive mb-3">
+                                            <table class="table table-sm table-dark table-bordered align-middle mb-0">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Дата</th>
+                                                        <th>Разфасовка</th>
+                                                        <th>Кутии (доставено)</th>
+                                                        <th>€/кутия</th>
+                                                        <th></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    @foreach ($editPurchRows as $pur)
+                                                        <tr>
+                                                            <td colspan="5" class="p-2 bg-black bg-opacity-25">
+                                                                <form method="POST" action="{{ route('dashboard.products.tobacco_pack_purchases.update', [$product->id, $pur->id]) }}" class="row g-2 align-items-end">
+                                                                    @csrf @method('PUT')
+                                                                    <div class="col-auto">
+                                                                        <label class="form-label small mb-0">Дата</label>
+                                                                        <input type="date" name="restocked_at" class="form-control form-control-sm" required value="{{ \Illuminate\Support\Carbon::parse($pur->restocked_at)->format('Y-m-d') }}">
+                                                                    </div>
+                                                                    <div class="col-auto">
+                                                                        <label class="form-label small mb-0">g</label>
+                                                                        <input type="number" name="pack_grams" class="form-control form-control-sm" min="1" step="1" required value="{{ (int) $pur->pack_grams }}">
+                                                                    </div>
+                                                                    <div class="col-auto">
+                                                                        <label class="form-label small mb-0">Кутии</label>
+                                                                        <input type="number" name="boxes_count" class="form-control form-control-sm" min="1" step="1" required value="{{ (int) $pur->boxes_count }}">
+                                                                    </div>
+                                                                    <div class="col-auto">
+                                                                        <label class="form-label small mb-0">€/кутия</label>
+                                                                        <input type="number" name="purchase_price_per_box" class="form-control form-control-sm" min="0" step="0.01" required value="{{ (float) $pur->purchase_price_per_box }}">
+                                                                    </div>
+                                                                    <div class="col-auto">
+                                                                        <button type="submit" class="btn btn-sm btn-primary">Запази</button>
+                                                                    </div>
+                                                                </form>
+                                                                <form method="POST" action="{{ route('dashboard.products.tobacco_pack_purchases.destroy', [$product->id, $pur->id]) }}" class="d-inline mt-1" onsubmit="return confirm('Изтриване на доставката?');">
+                                                                    @csrf @method('DELETE')
+                                                                    <button type="submit" class="btn btn-sm btn-outline-danger py-0">Изтрий доставка</button>
+                                                                </form>
+                                                            </td>
+                                                        </tr>
+                                                    @endforeach
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    @endif
+                                    <form method="POST" action="{{ route('dashboard.products.tobacco_pack_purchases.store', $product->id) }}" class="d-flex flex-wrap gap-2 align-items-end">
+                                        @csrf
+                                        <div>
+                                            <label class="form-label small mb-0">Дата</label>
+                                            <input type="date" name="restocked_at" class="form-control form-control-sm" required value="{{ now()->format('Y-m-d') }}">
+                                        </div>
+                                        <div>
+                                            <label class="form-label small mb-0">Разфасовка (g)</label>
+                                            <input type="number" name="pack_grams" class="form-control form-control-sm" min="1" step="1" required placeholder="50">
+                                        </div>
+                                        <div>
+                                            <label class="form-label small mb-0">Кутии</label>
+                                            <input type="number" name="boxes_count" class="form-control form-control-sm" min="1" step="1" required placeholder="10">
+                                        </div>
+                                        <div>
+                                            <label class="form-label small mb-0">€/кутия</label>
+                                            <input type="number" name="purchase_price_per_box" class="form-control form-control-sm" min="0" step="0.01" required placeholder="12.50">
+                                        </div>
+                                        <button type="submit" class="btn btn-sm btn-primary">Нова доставка</button>
+                                    </form>
+                                </details>
+                            @endif
                         </div>
                     </article>
                 @empty
@@ -266,16 +453,14 @@
 
         function toggleProductFields(prefix = '') {
             const categorySelect = document.querySelector(`${prefix}select[name="category"]`);
-            const priceInput = document.querySelector(`${prefix}input[name="price"]`);
+            const saleInput = document.querySelector(`${prefix}input[name="sale_price"]`);
             const unitInput = document.querySelector(`${prefix}input[name="unit"]`);
             const nameInput = document.querySelector(`${prefix}input[name="name"]`);
-            if (!categorySelect || !priceInput || !unitInput) return;
+            if (!categorySelect || !saleInput || !unitInput) return;
             const isTobacco = categorySelect.value === 'tobacco';
             const isHookah = categorySelect.value === 'hookah';
-            priceInput.disabled = isTobacco;
             unitInput.disabled = isTobacco;
             if (isTobacco) {
-                priceInput.value = '';
                 unitInput.value = 'g';
             } else if (unitInput.value === 'g') {
                 unitInput.value = 'бр';
@@ -289,6 +474,24 @@
                     nameInput.value = '';
                 }
             }
+            syncCreateTobaccoUi();
+        }
+
+        function syncCreateTobaccoUi() {
+            const priceWrap = document.getElementById('createNontobaccoPriceFields');
+            const hint = document.getElementById('createTobaccoHint');
+            const pr = document.getElementById('createPurchasePrice');
+            const sale = document.getElementById('createSalePrice');
+            const stockWrap = document.getElementById('createStockWrap');
+            const stockInp = document.getElementById('createStockQty');
+            if (!createCategory) return;
+            const isTobacco = createCategory.value === 'tobacco';
+            if (priceWrap) priceWrap.style.display = isTobacco ? 'none' : '';
+            if (hint) hint.style.display = isTobacco ? '' : 'none';
+            if (pr) pr.required = !isTobacco;
+            if (sale) sale.required = false;
+            if (stockWrap) stockWrap.style.display = isTobacco ? 'none' : '';
+            if (stockInp) stockInp.required = !isTobacco;
         }
 
         async function fetchSuggestions(term) {
@@ -393,17 +596,16 @@
         document.querySelectorAll('[data-product-row]').forEach((row) => {
             const select = row.querySelector('select[name="category"]');
             const brandSelect = row.querySelector('select[name="brand_id"]');
-            const priceInput = row.querySelector('input[name="price"]');
             const unitInput = row.querySelector('input[name="unit"]');
             const nameInput = row.querySelector('input[name="name"]');
-            if (!select || !priceInput || !unitInput) return;
+            const priceBlock = row.querySelector('[data-edit-nontobacco-prices]');
+            const stockBlock = row.querySelector('[data-edit-stock-fields]');
+            if (!select || !unitInput) return;
             const apply = () => {
                 const isTobacco = select.value === 'tobacco';
                 const isHookah = select.value === 'hookah';
-                priceInput.disabled = isTobacco;
                 unitInput.disabled = isTobacco;
                 if (isTobacco) {
-                    priceInput.value = '0';
                     unitInput.value = 'g';
                 }
                 if (nameInput) {
@@ -413,6 +615,15 @@
                     if (isHookah) {
                         nameInput.value = '';
                     }
+                }
+                if (priceBlock) {
+                    priceBlock.style.display = isTobacco ? 'none' : '';
+                }
+                if (stockBlock) {
+                    stockBlock.style.display = isTobacco ? 'none' : '';
+                    stockBlock.querySelectorAll('input').forEach((inp) => {
+                        inp.required = !isTobacco;
+                    });
                 }
                 filterBrandOptions(brandSelect, select.value);
             };
