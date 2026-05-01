@@ -20,7 +20,9 @@ Route::middleware('auth')->group(function () {
     Route::get('/dashboard/workers-presence', [DashboardController::class, 'workersPresence'])->name('dashboard.workers_presence');
     Route::get('/reports', [DashboardController::class, 'reports'])->name('reports');
     Route::get('/products', [DashboardController::class, 'products'])->name('products');
-    Route::get('/tables', [DashboardController::class, 'tables'])->name('tables');
+    Route::get('/take-order', [DashboardController::class, 'takeOrder'])->name('take_order');
+    Route::get('/recipes', [DashboardController::class, 'recipes'])->name('recipes');
+    Route::get('/invoice-import', [DashboardController::class, 'invoiceImport'])->name('invoice_import');
     Route::post('/dashboard/brands', [DashboardController::class, 'addBrand'])->name('dashboard.brands.store');
     Route::post('/dashboard/products', [DashboardController::class, 'addProduct'])->name('dashboard.products.store');
     Route::get('/dashboard/products/image-suggestions', [DashboardController::class, 'imageSuggestions'])->name('dashboard.products.image_suggestions');
@@ -36,6 +38,9 @@ Route::middleware('auth')->group(function () {
     Route::post('/dashboard/tables/{tableId}/status', [DashboardController::class, 'setTableStatus'])->name('dashboard.tables.status');
     Route::post('/dashboard/tables/{tableId}/reservations', [DashboardController::class, 'createReservation'])->name('dashboard.tables.reservations.store');
     Route::post('/dashboard/orders/items', [DashboardController::class, 'addOrderItem'])->name('dashboard.orders.items.store');
+    Route::post('/dashboard/orders/items/{itemId}/quantity', [DashboardController::class, 'updateOrderItemQuantity'])->name('dashboard.orders.items.quantity');
+    Route::post('/dashboard/orders/items/{itemId}/status', [DashboardController::class, 'updateOrderItemStatus'])->name('dashboard.orders.items.status');
+    Route::post('/dashboard/orders/items/{itemId}/delete', [DashboardController::class, 'deleteOrderItem'])->name('dashboard.orders.items.delete');
     Route::post('/dashboard/orders/ai', [DashboardController::class, 'aiAddOrder'])->name('dashboard.orders.ai');
     Route::post('/dashboard/orders/close', [DashboardController::class, 'closeOrder'])->name('dashboard.orders.close');
     Route::post('/logout', [LoginController::class, 'logout'])->name('logout');

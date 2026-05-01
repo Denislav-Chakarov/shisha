@@ -15,13 +15,10 @@
         <a class="nav-link active" href="{{ route('dashboard') }}"><span class="ic">□</span>Табло</a>
         <div class="menu-title">Управление</div>
         <a class="nav-link" href="{{ route('products') }}"><span class="ic">◈</span>Продукти</a>
-        <a class="nav-link" href="{{ route('tables') }}"><span class="ic">▦</span>Маси</a>
-        <a class="nav-link" href="{{ route('tables') }}"><span class="ic">◍</span>Поръчки</a>
+        <a class="nav-link" href="{{ route('take_order') }}"><span class="ic">◍</span>Вземи поръчка</a>
+        <a class="nav-link" href="{{ route('recipes') }}"><span class="ic">◌</span>Рецепти</a>
         <a class="nav-link" href="{{ route('products') }}"><span class="ic">◧</span>Наличности</a>
-        <div class="menu-title">Настройки</div>
-        <a class="nav-link" href="#"><span class="ic">◉</span>Потребители</a>
-        <a class="nav-link" href="#"><span class="ic">◌</span>Категории</a>
-        <a class="nav-link" href="#"><span class="ic">◇</span>Настройки</a>
+        <a class="nav-link" href="{{ route('invoice_import') }}"><span class="ic">◇</span>Импорт фактура</a>
         <div class="menu-title">Анализи</div>
         <a class="nav-link" href="{{ route('reports') }}"><span class="ic">◫</span>Справки</a>
         <div class="menu-title">Служители</div>
@@ -128,19 +125,8 @@
                         </div>
                     @endif
 
-                    <div class="ai-box">
-                        <div class="muted" style="margin-bottom:6px;">
-                            Добавяне на поръчка (пример: "2 cola, 1 musthave kiwi, 3 red grape")
-                        </div>
-                        <form method="POST" action="{{ route('dashboard.orders.ai') }}">
-                            @csrf
-                            <input type="hidden" name="store_table_id" value="{{ $selectedTable->id }}">
-                            <textarea name="order_text" placeholder="Въведете свободен текст за поръчката..." required>{{ old('order_text', $aiDraftPrompt ?? '') }}</textarea>
-                            <button class="chip" type="submit" style="margin-top:6px;">Добави към поръчка</button>
-                        </form>
-                        @if (!empty($lastAiPrompt))
-                            <div class="muted ai-last-prompt">Последен въведен prompt: {{ $lastAiPrompt }}</div>
-                        @endif
+                    <div class="muted">
+                        За добавяне на нови артикули използвайте таба <strong>Вземи поръчка</strong>.
                     </div>
 
                 </div>
@@ -148,23 +134,44 @@
             </article>
 
             <aside class="panel">
-                <h2>Последни поръчани продукти (Маса {{ $selectedTable->table_number ?? '-' }})</h2>
-                @forelse ($recentProducts as $item)
+                <h2>Текуща поръчка (Маса {{ $selectedTable->table_number ?? '-' }})</h2>
+                @forelse (($selectedOrderItems ?? collect()) as $item)
                     <div class="product-row">
                         <div class="product-info">
                             <div class="product-name">{{ $item->product_name }}</div>
                             @if (!empty($item->meta_note))
                                 <span class="hookah-flavors">{{ trim($item->meta_note, '() ') }}</span>
                             @endif
-                            <small class="product-meta">{{ \Illuminate\Support\Carbon::parse($item->created_at)->format('H:i') }} • €{{ number_format((float) $item->unit_price, 2) }}/бр</small>
+                            <small class="product-meta">€{{ number_format((float) $item->unit_price, 2) }}/бр</small>
                         </div>
                         <div class="qty">
                             <div>бр. {{ $item->quantity }}</div>
                             <small>€{{ number_format((float) $item->line_total, 2) }}</small>
                         </div>
+                        @if (isset($item->id) && isset($selectedOpenOrder))
+                            <div style="display:flex; gap:6px; align-items:center; margin-top:6px; flex-wrap:wrap;">
+                                <form method="POST" action="{{ route('dashboard.orders.items.status', $item->id) }}">
+                                    @csrf
+                                    <input type="hidden" name="item_status" value="{{ ($item->item_status ?? 'ordered') === 'served' ? 'ordered' : 'served' }}">
+                                    <button class="chip" type="submit">
+                                        {{ ($item->item_status ?? 'ordered') === 'served' ? 'Маркирай поръчано' : 'Маркирай сервирано' }}
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ route('dashboard.orders.items.quantity', $item->id) }}" style="display:flex; gap:6px;">
+                                    @csrf
+                                    <input type="number" name="quantity" min="1" max="100" value="{{ (int) $item->quantity }}" style="width:72px;">
+                                    <button class="chip" type="submit">Обнови</button>
+                                </form>
+                                <form method="POST" action="{{ route('dashboard.orders.items.delete', $item->id) }}">
+                                    @csrf
+                                    <button class="chip" type="submit">Премахни</button>
+                                </form>
+                                <span class="muted">Статус: {{ ($item->item_status ?? 'ordered') === 'served' ? 'Сервирано' : 'Поръчано' }}</span>
+                            </div>
+                        @endif
                     </div>
                 @empty
-                    <div class="muted">Все още няма поръчани продукти.</div>
+                    <div class="muted">Все още няма артикули в активната поръчка.</div>
                 @endforelse
                 <div class="right-order-summary">
                     <div class="order-total right-order-total">

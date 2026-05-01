@@ -14,9 +14,10 @@
         <a class="nav-link" href="{{ route('dashboard') }}"><span class="ic">□</span>Табло</a>
         <div class="menu-title">Управление</div>
         <a class="nav-link" href="{{ route('products') }}"><span class="ic">◈</span>Продукти</a>
-        <a class="nav-link" href="{{ route('tables') }}"><span class="ic">▦</span>Маси</a>
-        <a class="nav-link" href="{{ route('tables') }}"><span class="ic">◍</span>Поръчки</a>
+        <a class="nav-link" href="{{ route('take_order') }}"><span class="ic">◍</span>Вземи поръчка</a>
+        <a class="nav-link" href="{{ route('recipes') }}"><span class="ic">◌</span>Рецепти</a>
         <a class="nav-link" href="{{ route('products') }}"><span class="ic">◧</span>Наличности</a>
+        <a class="nav-link" href="{{ route('invoice_import') }}"><span class="ic">◇</span>Импорт фактура</a>
         <div class="menu-title">Настройки</div>
         <a class="nav-link" href="#"><span class="ic">◉</span>Потребители</a>
         <a class="nav-link" href="#"><span class="ic">◌</span>Категории</a>

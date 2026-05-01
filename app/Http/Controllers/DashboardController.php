@@ -113,6 +113,47 @@ class DashboardController extends Controller
         return view('tables', $this->buildPageData($request));
     }
 
+    public function takeOrder(Request $request): View
+    {
+        return view('take-order', $this->buildPageData($request));
+    }
+
+    public function recipes(Request $request): View
+    {
+        $data = $this->buildPageData($request);
+
+        $data['drinkProducts'] = $data['products']
+            ->where('category', 'drink')
+            ->groupBy('brand_name');
+        $data['tobaccoProducts'] = $data['products']
+            ->where('category', 'tobacco')
+            ->groupBy('brand_name');
+        $data['hookahProducts'] = $data['products']
+            ->where('category', 'hookah')
+            ->groupBy('brand_name');
+
+        $data['hookahRecipes'] = DB::table('hookah_recipes')
+            ->join('products as hookah_products', 'hookah_recipes.hookah_product_id', '=', 'hookah_products.id')
+            ->join('products as tobacco_products', 'hookah_recipes.tobacco_product_id', '=', 'tobacco_products.id')
+            ->select(
+                'hookah_recipes.id',
+                'hookah_products.name as hookah_name',
+                'tobacco_products.name as tobacco_name',
+                'hookah_recipes.grams_per_serving'
+            )
+            ->orderBy('hookah_products.name')
+            ->orderBy('tobacco_products.name')
+            ->get()
+            ->groupBy('hookah_name');
+
+        return view('recipes', $data);
+    }
+
+    public function invoiceImport(Request $request): View
+    {
+        return view('invoice-import', $this->buildPageData($request));
+    }
+
     public function reports(Request $request): View
     {
         $dateFromInput = trim((string) $request->query('date_from', now()->format('Y-m-d')));
@@ -337,7 +378,11 @@ class DashboardController extends Controller
                 ->join('brands', 'products.brand_id', '=', 'brands.id')
                 ->where('order_items.order_id', $selectedOpenOrder->id)
                 ->select(
+                    'order_items.id',
+                    'order_items.order_id',
+                    'order_items.product_id',
                     'order_items.quantity',
+                    'order_items.item_status',
                     'order_items.unit_price',
                     'order_items.line_total',
                     'order_items.meta_note',
@@ -358,9 +403,11 @@ class DashboardController extends Controller
             ->orderByDesc('order_items.created_at')
             ->limit(8)
             ->select(
+                'order_items.id as order_item_id',
                 'store_tables.table_number',
                 'products.name as product_name',
                 'order_items.quantity',
+                'order_items.item_status',
                 'order_items.unit_price',
                 'order_items.line_total',
                 'order_items.meta_note',
@@ -1153,6 +1200,155 @@ class DashboardController extends Controller
         return back()->with('status', 'Артикулът е добавен към поръчката на масата.');
     }
 
+    public function updateOrderItemQuantity(Request $request, int $itemId): RedirectResponse
+    {
+        $validated = $request->validate([
+            'quantity' => ['required', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        DB::transaction(function () use ($itemId, $validated): void {
+            $item = DB::table('order_items')
+                ->where('id', $itemId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($item === null) {
+                throw ValidationException::withMessages([
+                    'quantity' => 'Артикулът не е намерен.',
+                ]);
+            }
+
+            $order = DB::table('orders')
+                ->where('id', $item->order_id)
+                ->lockForUpdate()
+                ->first();
+            if ($order === null || $order->status !== 'open') {
+                throw ValidationException::withMessages([
+                    'quantity' => 'Поръчката вече е приключена.',
+                ]);
+            }
+
+            $product = DB::table('products')
+                ->where('id', $item->product_id)
+                ->lockForUpdate()
+                ->first();
+            if ($product === null) {
+                throw ValidationException::withMessages([
+                    'quantity' => 'Продуктът не е намерен.',
+                ]);
+            }
+
+            $oldQty = (int) $item->quantity;
+            $newQty = (int) $validated['quantity'];
+            $delta = $newQty - $oldQty;
+
+            if ($delta > 0 && (int) $product->stock_quantity < $delta) {
+                throw ValidationException::withMessages([
+                    'quantity' => "Недостатъчна наличност за {$product->name}.",
+                ]);
+            }
+
+            if ($delta !== 0) {
+                DB::table('products')
+                    ->where('id', $product->id)
+                    ->update([
+                        'stock_quantity' => DB::raw('stock_quantity ' . ($delta > 0 ? '-' : '+') . ' ' . abs($delta)),
+                        'updated_at' => now(),
+                    ]);
+
+                if ($product->category === 'hookah') {
+                    if ($delta > 0) {
+                        $this->consumeHookahTobacco((int) $product->id, $delta);
+                    } else {
+                        $this->restoreHookahTobacco((int) $product->id, abs($delta));
+                    }
+                }
+            }
+
+            DB::table('order_items')
+                ->where('id', $itemId)
+                ->update([
+                    'quantity' => $newQty,
+                    'line_total' => (float) $item->unit_price * $newQty,
+                    'updated_at' => now(),
+                ]);
+
+            $this->recalculateOrderTotal((int) $item->order_id);
+        });
+
+        return back()->with('status', 'Количеството е обновено.');
+    }
+
+    public function updateOrderItemStatus(Request $request, int $itemId): RedirectResponse
+    {
+        $validated = $request->validate([
+            'item_status' => ['required', 'in:ordered,served'],
+        ]);
+
+        $updated = DB::table('order_items')
+            ->where('id', $itemId)
+            ->update([
+                'item_status' => $validated['item_status'],
+                'updated_at' => now(),
+            ]);
+
+        if ($updated === 0) {
+            return back()->with('error', 'Артикулът не е намерен.');
+        }
+
+        return back()->with('status', 'Статусът на артикула е обновен.');
+    }
+
+    public function deleteOrderItem(int $itemId): RedirectResponse
+    {
+        DB::transaction(function () use ($itemId): void {
+            $item = DB::table('order_items')
+                ->where('id', $itemId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($item === null) {
+                throw ValidationException::withMessages([
+                    'order_item' => 'Артикулът не е намерен.',
+                ]);
+            }
+
+            $order = DB::table('orders')
+                ->where('id', $item->order_id)
+                ->lockForUpdate()
+                ->first();
+            if ($order === null || $order->status !== 'open') {
+                throw ValidationException::withMessages([
+                    'order_item' => 'Поръчката вече е приключена.',
+                ]);
+            }
+
+            $product = DB::table('products')
+                ->where('id', $item->product_id)
+                ->lockForUpdate()
+                ->first();
+
+            if ($product !== null) {
+                $qty = (int) $item->quantity;
+                DB::table('products')
+                    ->where('id', $product->id)
+                    ->update([
+                        'stock_quantity' => DB::raw("stock_quantity + {$qty}"),
+                        'updated_at' => now(),
+                    ]);
+
+                if ($product->category === 'hookah') {
+                    $this->restoreHookahTobacco((int) $product->id, $qty);
+                }
+            }
+
+            DB::table('order_items')->where('id', $itemId)->delete();
+            $this->recalculateOrderTotal((int) $item->order_id);
+        });
+
+        return back()->with('status', 'Артикулът е премахнат от поръчката.');
+    }
+
     public function addHookahRecipe(Request $request): RedirectResponse
     {
         $validated = $request->validate([
@@ -1483,6 +1679,7 @@ class DashboardController extends Controller
             'order_id' => $orderId,
             'product_id' => $productId,
             'quantity' => $quantity,
+            'item_status' => 'ordered',
             'unit_price' => $unitPrice,
             'line_total' => $lineTotal,
             'meta_note' => $metaNote,
@@ -1497,16 +1694,7 @@ class DashboardController extends Controller
                 'updated_at' => now(),
             ]);
 
-        $newTotal = (float) DB::table('order_items')
-            ->where('order_id', $orderId)
-            ->sum('line_total');
-
-        DB::table('orders')
-            ->where('id', $orderId)
-            ->update([
-                'total_amount' => $newTotal,
-                'updated_at' => now(),
-            ]);
+        $this->recalculateOrderTotal($orderId);
     }
 
     /**
@@ -1973,6 +2161,47 @@ class DashboardController extends Controller
                     'updated_at' => now(),
                 ]);
         }
+    }
+
+    private function restoreHookahTobacco(int $hookahProductId, int $quantity): void
+    {
+        if ($quantity < 1) {
+            return;
+        }
+
+        $recipes = DB::table('hookah_recipes')
+            ->where('hookah_product_id', $hookahProductId)
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($recipes as $recipe) {
+            $gramsNeeded = (float) $recipe->grams_per_serving * $quantity;
+            $gramsNeededInt = (int) ceil($gramsNeeded);
+            if ($gramsNeededInt < 1) {
+                continue;
+            }
+
+            DB::table('products')
+                ->where('id', $recipe->tobacco_product_id)
+                ->update([
+                    'stock_quantity' => DB::raw("stock_quantity + {$gramsNeededInt}"),
+                    'updated_at' => now(),
+                ]);
+        }
+    }
+
+    private function recalculateOrderTotal(int $orderId): void
+    {
+        $newTotal = (float) DB::table('order_items')
+            ->where('order_id', $orderId)
+            ->sum('line_total');
+
+        DB::table('orders')
+            ->where('id', $orderId)
+            ->update([
+                'total_amount' => $newTotal,
+                'updated_at' => now(),
+            ]);
     }
 
     public function closeOrder(Request $request): RedirectResponse

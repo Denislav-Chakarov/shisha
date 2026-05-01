@@ -20,9 +20,10 @@
             <a class="{{ ($filters['category'] ?? 'all') === 'drink' ? 'active' : '' }}" href="{{ route('products', ['category' => 'drink', 'q' => $filters['q'] ?? '', 'sort' => $filters['sort'] ?? 'name_asc', 'view' => $filters['view'] ?? 'list']) }}">Напитки</a>
             <a class="{{ ($filters['category'] ?? 'all') === 'hookah' ? 'active' : '' }}" href="{{ route('products', ['category' => 'hookah', 'q' => $filters['q'] ?? '', 'sort' => $filters['sort'] ?? 'name_asc', 'view' => $filters['view'] ?? 'list']) }}">Наргилета</a>
         </div>
-        <a class="nav-link" href="{{ route('tables') }}"><span class="ic">▦</span>Маси</a>
-        <a class="nav-link" href="{{ route('tables') }}"><span class="ic">◍</span>Поръчки</a>
+        <a class="nav-link" href="{{ route('take_order') }}"><span class="ic">◍</span>Вземи поръчка</a>
+        <a class="nav-link" href="{{ route('recipes') }}"><span class="ic">◌</span>Рецепти</a>
         <a class="nav-link active" href="{{ route('products') }}"><span class="ic">◧</span>Наличности</a>
+        <a class="nav-link" href="{{ route('invoice_import') }}"><span class="ic">◇</span>Импорт фактура</a>
         <div class="menu-title">Анализи</div>
         <a class="nav-link" href="{{ route('reports') }}"><span class="ic">◫</span>Справки</a>
         <div class="user-card">
