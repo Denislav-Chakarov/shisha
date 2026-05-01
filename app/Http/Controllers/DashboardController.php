@@ -298,14 +298,30 @@ class DashboardController extends Controller
             }
         });
 
-        $brands = DB::table('brands')->orderBy('category')->orderBy('name')->get();
+        $brands = DB::table('brands')
+            ->join('categories', 'brands.category_id', '=', 'categories.id')
+            ->select(
+                'brands.id',
+                'brands.name',
+                'brands.category_id',
+                DB::raw('categories.behavior_type as category'),
+                DB::raw('categories.slug as category_slug'),
+                DB::raw('categories.behavior_type as category_behavior')
+            )
+            ->orderBy('categories.position')
+            ->orderBy('brands.name')
+            ->get();
 
         $products = DB::table('products')
             ->join('brands', 'products.brand_id', '=', 'brands.id')
+            ->join('categories', 'products.category_id', '=', 'categories.id')
             ->select(
                 'products.id',
                 'products.name',
-                'products.category',
+                DB::raw('categories.behavior_type as category'),
+                DB::raw('categories.slug as category_slug'),
+                DB::raw('categories.behavior_type as category_behavior'),
+                'products.category_id',
                 'products.flavor',
                 'products.price',
                 'products.purchase_price',

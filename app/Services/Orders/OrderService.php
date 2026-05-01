@@ -51,6 +51,7 @@ class OrderService
 
             $product = Product::query()
                 ->whereKey($productId)
+                ->with('category:id,behavior_type')
                 ->lockForUpdate()
                 ->first();
 
@@ -60,13 +61,15 @@ class OrderService
                 ]);
             }
 
+            $isHookah = (string) ($product->category?->behavior_type ?? '') === 'hookah';
             if ((int) $product->stock_quantity < $quantity) {
                 throw ValidationException::withMessages([
                     'quantity' => "Недостатъчна наличност за {$product->name}.",
                 ]);
             }
 
-            if ($product->category === 'hookah') {
+            // Hookah legacy behavior: consume recipe immediately when adding
+            if ($isHookah) {
                 $this->consumeHookahTobacco((int) $product->id, $quantity);
             }
 
@@ -138,6 +141,7 @@ class OrderService
             $oldQty = (int) $item->quantity;
             $delta = $newQuantity - $oldQty;
 
+            $isHookah = (string) ($product->category?->behavior_type ?? '') === 'hookah';
             if ($delta > 0 && (int) $product->stock_quantity < $delta) {
                 throw ValidationException::withMessages([
                     'quantity' => "Недостатъчна наличност за {$product->name}.",
@@ -149,7 +153,8 @@ class OrderService
                     'stock_quantity' => DB::raw('stock_quantity ' . ($delta > 0 ? '-' : '+') . ' ' . abs($delta)),
                 ]);
 
-                if ($product->category === 'hookah') {
+                // Hookah legacy behavior: adjust recipe immediately with quantity changes
+                if ($isHookah) {
                     if ($delta > 0) {
                         $this->consumeHookahTobacco((int) $product->id, $delta);
                     } else {
@@ -221,11 +226,12 @@ class OrderService
 
             if ($product !== null) {
                 $qty = (int) $item->quantity;
+                $isHookah = (string) ($product->category?->behavior_type ?? '') === 'hookah';
                 $product->update([
                     'stock_quantity' => DB::raw("stock_quantity + {$qty}"),
                 ]);
 
-                if ($product->category === 'hookah') {
+                if ($isHookah) {
                     $this->restoreHookahTobacco((int) $product->id, $qty);
                 }
             }
@@ -253,10 +259,12 @@ class OrderService
                 ]);
             }
 
+            // (1) Restore hookah "device" stock on close (legacy behavior)
             $hookahItems = OrderItem::query()
                 ->join('products', 'order_items.product_id', '=', 'products.id')
+                ->join('categories', 'products.category_id', '=', 'categories.id')
                 ->where('order_items.order_id', (int) $order->id)
-                ->where('products.category', 'hookah')
+                ->where('categories.behavior_type', 'hookah')
                 ->select('order_items.product_id', DB::raw('SUM(order_items.quantity) as total_quantity'))
                 ->groupBy('order_items.product_id')
                 ->get();

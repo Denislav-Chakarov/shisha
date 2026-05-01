@@ -15,7 +15,8 @@
         <a class="nav-link" href="{{ route('products') }}"><span class="ic">◈</span>Продукти</a>
         <a class="nav-link" href="{{ route('take_order') }}"><span class="ic">◍</span>Вземи поръчка</a>
         <a class="nav-link active" href="{{ route('recipes') }}"><span class="ic">◌</span>Рецепти</a>
-        <a class="nav-link" href="{{ route('products') }}"><span class="ic">◧</span>Наличности</a>
+        <a class="nav-link" href="{{ route('inventory') }}"><span class="ic">◧</span>Наличности</a>
+        <a class="nav-link" href="{{ route('deliveries') }}"><span class="ic">◨</span>Зареждания</a>
         <a class="nav-link" href="{{ route('invoice_import') }}"><span class="ic">◇</span>Импорт фактура</a>
         <div class="menu-title">Анализи</div>
         <a class="nav-link" href="{{ route('reports') }}"><span class="ic">◫</span>Справки</a>

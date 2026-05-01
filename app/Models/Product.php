@@ -14,7 +14,7 @@ class Product extends Model
 
     protected $fillable = [
         'brand_id',
-        'category',
+        'category_id',
         'name',
         'flavor',
         'price',
@@ -23,6 +23,7 @@ class Product extends Model
         'unit',
         'image_path',
         'is_active',
+        'writeoff_mode',
     ];
 
     protected function casts(): array
@@ -40,6 +41,14 @@ class Product extends Model
     public function brand(): BelongsTo
     {
         return $this->belongsTo(Brand::class);
+    }
+
+    /**
+     * @return BelongsTo<Category, $this>
+     */
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
     }
 
     /**
@@ -67,6 +76,14 @@ class Product extends Model
     }
 
     /**
+     * @return HasMany<ProductDelivery, $this>
+     */
+    public function deliveries(): HasMany
+    {
+        return $this->hasMany(ProductDelivery::class);
+    }
+
+    /**
      * @param Builder<Product> $query
      * @return Builder<Product>
      */
@@ -81,7 +98,9 @@ class Product extends Model
      */
     public function scopeCategory(Builder $query, string $category): Builder
     {
-        return $query->where('category', $category);
+        return $query->whereHas('category', function (Builder $q) use ($category): void {
+            $q->where('slug', $category)->orWhere('behavior_type', $category);
+        });
     }
 }
 

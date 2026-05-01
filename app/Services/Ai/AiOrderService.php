@@ -22,9 +22,9 @@ class AiOrderService
     public function addFromText(int $storeTableId, string $orderText, ?int $userId = null): array
     {
         $products = Product::query()
-            ->with('brand:id,name')
+            ->with(['brand:id,name', 'category:id,slug,behavior_type'])
             ->active()
-            ->select(['id', 'brand_id', 'category', 'name', 'flavor', 'is_active'])
+            ->select(['id', 'brand_id', 'category_id', 'name', 'flavor', 'is_active'])
             ->get()
             ->map(function (Product $product): array {
                 $brandName = (string) ($product->brand?->name ?? '');
@@ -34,7 +34,7 @@ class AiOrderService
                     'id' => (int) $product->id,
                     'name' => (string) $product->name,
                     'brand_name' => $brandName,
-                    'category' => (string) $product->category,
+                    'behavior' => (string) ($product->category?->behavior_type ?? 'generic'),
                     'search_text' => $this->parser->normalizeOrderToken($search),
                 ];
             })
@@ -54,7 +54,7 @@ class AiOrderService
 
             $tobaccoCandidates = [];
             foreach ($products as $p) {
-                if (($p['category'] ?? '') === 'tobacco') {
+                if (($p['behavior'] ?? '') === 'tobacco') {
                     $tobaccoCandidates[] = $this->parser->normalizeOrderToken((string) $p['name']);
                 }
             }
@@ -71,7 +71,7 @@ class AiOrderService
 
                 if ($match === null && $this->parser->isHookahKeyword($termLower)) {
                     foreach ($products as $p) {
-                        if (($p['category'] ?? '') === 'hookah') {
+                        if (($p['behavior'] ?? '') === 'hookah') {
                             $match = $p;
                             break;
                         }
@@ -88,7 +88,7 @@ class AiOrderService
                     $hookahType = trim((string) ($item['hookah_type'] ?? ''));
                     $hookahFlavors = trim((string) ($item['hookah_flavors'] ?? ''));
 
-                    $hookahProducts = array_values(array_filter($products, fn ($p) => ($p['category'] ?? '') === 'hookah'));
+                    $hookahProducts = array_values(array_filter($products, fn ($p) => ($p['behavior'] ?? '') === 'hookah'));
 
                     if ($hookahType !== '') {
                         $hookahTypeNormalized = $this->parser->normalizeHookahTypeToken($hookahType);
@@ -123,7 +123,7 @@ class AiOrderService
                                     $hookahFlavors = $remainingFlavor;
                                 }
                             }
-                        } elseif (($match['category'] ?? '') !== 'hookah') {
+                        } elseif (($match['behavior'] ?? '') !== 'hookah') {
                             $looksLikeFlavor = false;
                             foreach ($tobaccoCandidates as $candidateName) {
                                 if ($candidateName !== '' && (str_contains($candidateName, $hookahTypeNormalized) || str_contains($hookahTypeNormalized, $candidateName))) {
@@ -145,7 +145,7 @@ class AiOrderService
                                 $match = $hookahProducts[0];
                             }
                         }
-                    } elseif (($match['category'] ?? '') !== 'hookah') {
+                    } elseif (($match['behavior'] ?? '') !== 'hookah') {
                         if ($hookahProducts !== []) {
                             $match = $hookahProducts[0];
                         }
@@ -160,7 +160,7 @@ class AiOrderService
                         }
                     }
 
-                    if (($match['category'] ?? '') !== 'hookah') {
+                    if (($match['behavior'] ?? '') !== 'hookah') {
                         $missed[] = $term;
                         continue;
                     }

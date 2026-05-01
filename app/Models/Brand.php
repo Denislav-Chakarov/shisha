@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Brand extends Model
@@ -13,8 +14,16 @@ class Brand extends Model
 
     protected $fillable = [
         'name',
-        'category',
+        'category_id',
     ];
+
+    /**
+     * @return BelongsTo<Category, $this>
+     */
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
+    }
 
     /**
      * @return HasMany<Product, $this>
@@ -30,7 +39,9 @@ class Brand extends Model
      */
     public function scopeCategory(Builder $query, string $category): Builder
     {
-        return $query->where('category', $category);
+        return $query->whereHas('category', function (Builder $q) use ($category): void {
+            $q->where('slug', $category)->orWhere('behavior_type', $category);
+        });
     }
 }
 
