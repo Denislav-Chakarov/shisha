@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\Orders\AiOrderController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -41,7 +42,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/dashboard/orders/items/{itemId}/quantity', [DashboardController::class, 'updateOrderItemQuantity'])->name('dashboard.orders.items.quantity');
     Route::post('/dashboard/orders/items/{itemId}/status', [DashboardController::class, 'updateOrderItemStatus'])->name('dashboard.orders.items.status');
     Route::post('/dashboard/orders/items/{itemId}/delete', [DashboardController::class, 'deleteOrderItem'])->name('dashboard.orders.items.delete');
-    Route::post('/dashboard/orders/ai', [DashboardController::class, 'aiAddOrder'])->name('dashboard.orders.ai');
+    Route::post('/dashboard/orders/ai', AiOrderController::class)->name('dashboard.orders.ai');
     Route::post('/dashboard/orders/close', [DashboardController::class, 'closeOrder'])->name('dashboard.orders.close');
     Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
 });

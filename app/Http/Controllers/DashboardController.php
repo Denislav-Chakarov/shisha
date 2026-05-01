@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use Carbon\Carbon;
+use App\Services\Orders\OrderService;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -16,6 +18,12 @@ use Illuminate\View\View;
 
 class DashboardController extends Controller
 {
+    public function __construct(
+        private readonly OrderService $orderService,
+        private readonly ConnectionInterface $db,
+    ) {
+    }
+
     public function index(Request $request): View
     {
         return view('dashboard', $this->buildPageData($request));
@@ -37,7 +45,7 @@ class DashboardController extends Controller
         if (! in_array($view, ['list', 'grid'], true)) {
             $view = 'list';
         }
-        $query = DB::table('products')
+        $query = $this->db->table('products')
             ->join('brands', 'products.brand_id', '=', 'brands.id')
             ->select(
                 'products.id',
@@ -80,14 +88,14 @@ class DashboardController extends Controller
         $tobaccoPackPurchasesByProduct = collect();
         $pageProductIds = $filteredProducts->pluck('id')->all();
         if ($pageProductIds !== []) {
-            $tobaccoPackPurchasesByProduct = DB::table('tobacco_pack_purchases')
+            $tobaccoPackPurchasesByProduct = $this->db->table('tobacco_pack_purchases')
                 ->whereIn('product_id', $pageProductIds)
                 ->orderByDesc('restocked_at')
                 ->orderByDesc('id')
                 ->get()
                 ->groupBy(fn ($row) => (int) $row->product_id);
 
-            $tobaccoPackInventoryByProduct = DB::table('tobacco_pack_inventory')
+            $tobaccoPackInventoryByProduct = $this->db->table('tobacco_pack_inventory')
                 ->whereIn('product_id', $pageProductIds)
                 ->orderBy('pack_grams')
                 ->get()
@@ -132,7 +140,7 @@ class DashboardController extends Controller
             ->where('category', 'hookah')
             ->groupBy('brand_name');
 
-        $data['hookahRecipes'] = DB::table('hookah_recipes')
+        $data['hookahRecipes'] = $this->db->table('hookah_recipes')
             ->join('products as hookah_products', 'hookah_recipes.hookah_product_id', '=', 'hookah_products.id')
             ->join('products as tobacco_products', 'hookah_recipes.tobacco_product_id', '=', 'tobacco_products.id')
             ->select(
@@ -180,7 +188,7 @@ class DashboardController extends Controller
             $dateToInput = $endAt->format('Y-m-d');
         }
 
-        $paidOrdersBaseQuery = DB::table('orders')
+        $paidOrdersBaseQuery = $this->db->table('orders')
             ->join('store_tables', 'orders.store_table_id', '=', 'store_tables.id')
             ->where('orders.status', 'paid')
             ->whereBetween('orders.closed_at', [$startAt, $endAt]);
@@ -194,7 +202,7 @@ class DashboardController extends Controller
             'revenue_total' => (float) (clone $paidOrdersBaseQuery)->sum('orders.total_amount'),
         ];
 
-        $byDay = DB::table('orders')
+        $byDay = $this->db->table('orders')
             ->where('status', 'paid')
             ->whereBetween('closed_at', [$startAt, $endAt])
             ->when($tableId !== null, fn ($q) => $q->where('store_table_id', $tableId))
@@ -203,7 +211,7 @@ class DashboardController extends Controller
             ->orderBy('report_day')
             ->get();
 
-        $byTable = DB::table('orders')
+        $byTable = $this->db->table('orders')
             ->join('store_tables', 'orders.store_table_id', '=', 'store_tables.id')
             ->where('orders.status', 'paid')
             ->whereBetween('orders.closed_at', [$startAt, $endAt])
@@ -214,9 +222,9 @@ class DashboardController extends Controller
             ->get();
 
         $ordersDetailed = collect();
-        if (DB::getDriverName() === 'mysql') {
+        if ($this->db->getDriverName() === 'mysql') {
             try {
-                $rows = DB::select(
+                $rows = $this->db->select(
                     'CALL sp_paid_orders_report(?, ?, ?)',
                     [$startAt->format('Y-m-d H:i:s'), $endAt->format('Y-m-d H:i:s'), $tableId]
                 );
@@ -227,7 +235,7 @@ class DashboardController extends Controller
         }
 
         if ($ordersDetailed->isEmpty()) {
-            $ordersDetailed = DB::table('orders')
+            $ordersDetailed = $this->db->table('orders')
                 ->join('store_tables', 'orders.store_table_id', '=', 'store_tables.id')
                 ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
                 ->where('orders.status', 'paid')
@@ -239,7 +247,7 @@ class DashboardController extends Controller
                 ->get();
         }
 
-        $tables = DB::table('store_tables')->select('id', 'table_number')->orderBy('table_number')->get();
+        $tables = $this->db->table('store_tables')->select('id', 'table_number')->orderBy('table_number')->get();
 
         return view('reports', [
             'filters' => [
@@ -495,6 +503,16 @@ class DashboardController extends Controller
             })
             ->values()
             ->all();
+    }
+
+    private function getAiPromptDraftSessionKey(int $userId, int $tableId): string
+    {
+        return "ai_prompt_draft.user_{$userId}.table_{$tableId}";
+    }
+
+    private function getAiPromptLastSessionKey(int $userId, int $tableId): string
+    {
+        return "ai_prompt_last.user_{$userId}.table_{$tableId}";
     }
 
     public function addBrand(Request $request): RedirectResponse
@@ -1160,42 +1178,12 @@ class DashboardController extends Controller
             'quantity' => ['required', 'integer', 'min:1', 'max:100'],
         ]);
 
-        DB::transaction(function () use ($validated, $request): void {
-            $table = DB::table('store_tables')
-                ->where('id', $validated['store_table_id'])
-                ->lockForUpdate()
-                ->first();
-
-            if ($table === null || ! $table->is_active) {
-                throw ValidationException::withMessages([
-                    'store_table_id' => 'Избраната маса е неактивна.',
-                ]);
-            }
-
-            $product = DB::table('products')
-                ->where('id', $validated['product_id'])
-                ->lockForUpdate()
-                ->first();
-
-            if ($product === null || ! $product->is_active) {
-                throw ValidationException::withMessages([
-                    'product_id' => 'Избраният продукт е неактивен.',
-                ]);
-            }
-
-            if ((int) $product->stock_quantity < (int) $validated['quantity']) {
-                throw ValidationException::withMessages([
-                    'quantity' => 'Недостатъчна наличност за този продукт.',
-                ]);
-            }
-
-            $this->appendOrderItem(
-                (int) $validated['store_table_id'],
-                (int) $validated['product_id'],
-                (int) $validated['quantity'],
-                $request->user()?->id
-            );
-        });
+        $this->orderService->appendItem(
+            (int) $validated['store_table_id'],
+            (int) $validated['product_id'],
+            (int) $validated['quantity'],
+            $request->user()?->id
+        );
 
         return back()->with('status', 'Артикулът е добавен към поръчката на масата.');
     }
@@ -1206,75 +1194,7 @@ class DashboardController extends Controller
             'quantity' => ['required', 'integer', 'min:1', 'max:100'],
         ]);
 
-        DB::transaction(function () use ($itemId, $validated): void {
-            $item = DB::table('order_items')
-                ->where('id', $itemId)
-                ->lockForUpdate()
-                ->first();
-
-            if ($item === null) {
-                throw ValidationException::withMessages([
-                    'quantity' => 'Артикулът не е намерен.',
-                ]);
-            }
-
-            $order = DB::table('orders')
-                ->where('id', $item->order_id)
-                ->lockForUpdate()
-                ->first();
-            if ($order === null || $order->status !== 'open') {
-                throw ValidationException::withMessages([
-                    'quantity' => 'Поръчката вече е приключена.',
-                ]);
-            }
-
-            $product = DB::table('products')
-                ->where('id', $item->product_id)
-                ->lockForUpdate()
-                ->first();
-            if ($product === null) {
-                throw ValidationException::withMessages([
-                    'quantity' => 'Продуктът не е намерен.',
-                ]);
-            }
-
-            $oldQty = (int) $item->quantity;
-            $newQty = (int) $validated['quantity'];
-            $delta = $newQty - $oldQty;
-
-            if ($delta > 0 && (int) $product->stock_quantity < $delta) {
-                throw ValidationException::withMessages([
-                    'quantity' => "Недостатъчна наличност за {$product->name}.",
-                ]);
-            }
-
-            if ($delta !== 0) {
-                DB::table('products')
-                    ->where('id', $product->id)
-                    ->update([
-                        'stock_quantity' => DB::raw('stock_quantity ' . ($delta > 0 ? '-' : '+') . ' ' . abs($delta)),
-                        'updated_at' => now(),
-                    ]);
-
-                if ($product->category === 'hookah') {
-                    if ($delta > 0) {
-                        $this->consumeHookahTobacco((int) $product->id, $delta);
-                    } else {
-                        $this->restoreHookahTobacco((int) $product->id, abs($delta));
-                    }
-                }
-            }
-
-            DB::table('order_items')
-                ->where('id', $itemId)
-                ->update([
-                    'quantity' => $newQty,
-                    'line_total' => (float) $item->unit_price * $newQty,
-                    'updated_at' => now(),
-                ]);
-
-            $this->recalculateOrderTotal((int) $item->order_id);
-        });
+        $this->orderService->updateItemQuantity($itemId, (int) $validated['quantity']);
 
         return back()->with('status', 'Количеството е обновено.');
     }
@@ -1285,66 +1205,14 @@ class DashboardController extends Controller
             'item_status' => ['required', 'in:ordered,served'],
         ]);
 
-        $updated = DB::table('order_items')
-            ->where('id', $itemId)
-            ->update([
-                'item_status' => $validated['item_status'],
-                'updated_at' => now(),
-            ]);
-
-        if ($updated === 0) {
-            return back()->with('error', 'Артикулът не е намерен.');
-        }
+        $this->orderService->updateItemStatus($itemId, (string) $validated['item_status']);
 
         return back()->with('status', 'Статусът на артикула е обновен.');
     }
 
     public function deleteOrderItem(int $itemId): RedirectResponse
     {
-        DB::transaction(function () use ($itemId): void {
-            $item = DB::table('order_items')
-                ->where('id', $itemId)
-                ->lockForUpdate()
-                ->first();
-
-            if ($item === null) {
-                throw ValidationException::withMessages([
-                    'order_item' => 'Артикулът не е намерен.',
-                ]);
-            }
-
-            $order = DB::table('orders')
-                ->where('id', $item->order_id)
-                ->lockForUpdate()
-                ->first();
-            if ($order === null || $order->status !== 'open') {
-                throw ValidationException::withMessages([
-                    'order_item' => 'Поръчката вече е приключена.',
-                ]);
-            }
-
-            $product = DB::table('products')
-                ->where('id', $item->product_id)
-                ->lockForUpdate()
-                ->first();
-
-            if ($product !== null) {
-                $qty = (int) $item->quantity;
-                DB::table('products')
-                    ->where('id', $product->id)
-                    ->update([
-                        'stock_quantity' => DB::raw("stock_quantity + {$qty}"),
-                        'updated_at' => now(),
-                    ]);
-
-                if ($product->category === 'hookah') {
-                    $this->restoreHookahTobacco((int) $product->id, $qty);
-                }
-            }
-
-            DB::table('order_items')->where('id', $itemId)->delete();
-            $this->recalculateOrderTotal((int) $item->order_id);
-        });
+        $this->orderService->deleteItem($itemId);
 
         return back()->with('status', 'Артикулът е премахнат от поръчката.');
     }
@@ -1393,866 +1261,13 @@ class DashboardController extends Controller
         return back()->with('status', 'Рецептата за наргиле е запазена.');
     }
 
-    public function aiAddOrder(Request $request): RedirectResponse
-    {
-        $validated = $request->validate([
-            'store_table_id' => ['required', 'integer', 'exists:store_tables,id'],
-            'order_text' => ['required', 'string', 'min:2', 'max:2000'],
-        ]);
-
-        $userId = (int) ($request->user()?->id ?? 0);
-        $tableId = (int) $validated['store_table_id'];
-        $promptText = (string) $validated['order_text'];
-        $request->session()->put($this->getAiPromptDraftSessionKey($userId, $tableId), $promptText);
-        $request->session()->put($this->getAiPromptLastSessionKey($userId, $tableId), $promptText);
-
-        $products = DB::table('products')
-            ->join('brands', 'products.brand_id', '=', 'brands.id')
-            ->where('products.is_active', true)
-            ->select(
-                'products.id',
-                'products.name',
-                'products.category',
-                'products.flavor',
-                'brands.name as brand_name'
-            )
-            ->get()
-            ->map(function ($product) {
-                $search = trim($product->brand_name . ' ' . $product->name . ' ' . ($product->flavor ?? ''));
-                $product->search_text = $this->normalizeOrderToken($search);
-                return $product;
-            });
-
-        $items = $this->parseAiOrderText((string) $validated['order_text']);
-        $added = 0;
-        $missed = [];
-
-        DB::transaction(function () use ($items, $products, $validated, $request, &$added, &$missed): void {
-            $planned = [];
-
-            foreach ($items as $item) {
-                $term = (string) ($item['term'] ?? '');
-                $quantity = (int) ($item['quantity'] ?? 1);
-                if ($term === '' || $quantity < 1) {
-                    continue;
-                }
-
-                $termLower = $this->normalizeOrderToken($term);
-                $match = $this->findBestProductMatch($termLower, $products);
-
-                if ($match === null) {
-                    if ($this->isHookahKeyword($termLower)) {
-                        $match = $products
-                            ->first(fn ($product) => $product->category === 'hookah');
-                    }
-                }
-
-                if ($match === null) {
-                    $missed[] = $term;
-                    continue;
-                }
-
-                $metaNote = null;
-                if (!empty($item['is_hookah'])) {
-                    $hookahType = trim((string) ($item['hookah_type'] ?? ''));
-                    $hookahFlavors = trim((string) ($item['hookah_flavors'] ?? ''));
-
-                    $hookahProducts = $products->where('category', 'hookah');
-                    if ($hookahType !== '') {
-                        $hookahTypeNormalized = $this->normalizeHookahTypeToken($hookahType);
-                        $typedHookahMatch = $hookahProducts
-                            ->filter(function ($product) use ($hookahTypeNormalized): bool {
-                                $productName = $this->normalizeOrderToken((string) $product->name);
-                                $brandName = $this->normalizeOrderToken((string) $product->brand_name);
-                                return str_contains($productName, $hookahTypeNormalized)
-                                    || str_contains($hookahTypeNormalized, $productName)
-                                    || str_contains($brandName, $hookahTypeNormalized)
-                                    || str_contains($hookahTypeNormalized, $brandName);
-                            })
-                            ->sortByDesc(fn ($product) => mb_strlen((string) $product->name))
-                            ->first();
-                        if ($typedHookahMatch !== null) {
-                            $match = $typedHookahMatch;
-                            if ($hookahFlavors === '') {
-                                $matchedBrandToken = $this->normalizeHookahTypeToken((string) $typedHookahMatch->brand_name);
-                                $matchedNameToken = $this->normalizeHookahTypeToken((string) $typedHookahMatch->name);
-                                $remainingFlavor = str_replace([$matchedBrandToken, $matchedNameToken], ' ', $hookahTypeNormalized);
-                                $remainingFlavor = $this->normalizeOrderToken($remainingFlavor);
-                                if ($remainingFlavor !== '' && $remainingFlavor !== 'наргиле') {
-                                    $hookahFlavors = $remainingFlavor;
-                                }
-                            }
-                        } elseif ($match === null || $match->category !== 'hookah') {
-                            $looksLikeFlavor = DB::table('products')
-                                ->where('category', 'tobacco')
-                                ->where('is_active', true)
-                                ->where(function ($q) use ($hookahTypeNormalized): void {
-                                    $q->whereRaw('LOWER(name) LIKE ?', ['%' . mb_strtolower($hookahTypeNormalized) . '%'])
-                                        ->orWhereRaw('LOWER(COALESCE(flavor, "")) LIKE ?', ['%' . mb_strtolower($hookahTypeNormalized) . '%']);
-                                })
-                                ->exists();
-
-                            if (! $looksLikeFlavor) {
-                                $missed[] = "тип наргиле: {$hookahType}";
-                                continue;
-                            }
-
-                            if ($hookahFlavors === '') {
-                                $hookahFlavors = $this->normalizeOrderToken($hookahType);
-                            }
-                            $fallbackHookah = $hookahProducts->first();
-                            if ($fallbackHookah !== null) {
-                                $match = $fallbackHookah;
-                            }
-                        }
-                    } elseif ($match->category !== 'hookah') {
-                        $fallbackHookah = $hookahProducts->first();
-                        if ($fallbackHookah !== null) {
-                            $match = $fallbackHookah;
-                        }
-                    }
-
-                    if ($hookahFlavors !== '') {
-                        $resolvedFlavors = $this->resolveHookahFlavors($hookahFlavors, $products);
-                        $hookahFlavors = $resolvedFlavors['value'];
-                        if ($resolvedFlavors['unknown'] !== []) {
-                            $missed[] = 'вкус: ' . implode(' + ', $resolvedFlavors['unknown']);
-                            continue;
-                        }
-                    }
-
-                    if ($match === null || $match->category !== 'hookah') {
-                        $missed[] = $term;
-                        continue;
-                    }
-
-                    if ($hookahFlavors !== '') {
-                        $metaNote = mb_strtolower($hookahFlavors);
-                    }
-                }
-
-                $productId = (int) $match->id;
-                $plannedKey = $productId . '|' . ($metaNote ?? '');
-                if (! isset($planned[$plannedKey])) {
-                    $planned[$plannedKey] = [
-                        'product_id' => $productId,
-                        'product_name' => (string) $match->name,
-                        'quantity' => 0,
-                        'meta_note' => $metaNote,
-                    ];
-                }
-                $planned[$plannedKey]['quantity'] += $quantity;
-            }
-
-            if ($missed !== []) {
-                throw ValidationException::withMessages([
-                    'order_text' => 'Неразпознати продукти: ' . implode('; ', array_slice($missed, 0, 6)),
-                ]);
-            }
-
-            if ($planned !== []) {
-                $insufficient = [];
-                $validationByProduct = [];
-                foreach ($planned as $productPlan) {
-                    $productKey = (int) $productPlan['product_id'];
-                    if (! isset($validationByProduct[$productKey])) {
-                        $validationByProduct[$productKey] = [
-                            'product_id' => $productKey,
-                            'product_name' => (string) $productPlan['product_name'],
-                            'quantity' => 0,
-                        ];
-                    }
-                    $validationByProduct[$productKey]['quantity'] += (int) $productPlan['quantity'];
-                }
-
-                foreach ($validationByProduct as $productPlan) {
-                    $product = DB::table('products')
-                        ->where('id', $productPlan['product_id'])
-                        ->lockForUpdate()
-                        ->first();
-
-                    if ($product === null || ! $product->is_active) {
-                        $insufficient[] = "{$productPlan['product_name']} (неактивен продукт)";
-                        continue;
-                    }
-
-                    $available = (int) $product->stock_quantity;
-                    $requested = (int) $productPlan['quantity'];
-                    if ($available < $requested) {
-                        $unit = trim((string) ($product->unit ?? 'бр'));
-                        if ($unit === '') {
-                            $unit = 'бр';
-                        }
-                        $insufficient[] = "{$product->name} (заявени {$requested} {$unit}, налични {$available} {$unit})";
-                    }
-                }
-
-                if ($insufficient !== []) {
-                    throw ValidationException::withMessages([
-                        'order_text' => 'Недостатъчна наличност: ' . implode('; ', $insufficient),
-                    ]);
-                }
-
-                foreach ($planned as $productPlan) {
-                    $this->appendOrderItem(
-                        (int) $validated['store_table_id'],
-                        (int) $productPlan['product_id'],
-                        (int) $productPlan['quantity'],
-                        $request->user()?->id,
-                        $productPlan['meta_note']
-                    );
-                    $added++;
-                }
-            }
-        });
-
-        if ($added === 0) {
-            return back()
-                ->withInput()
-                ->with('error', 'Не успях да разпозная продукти от текста.');
-        }
-
-        $message = "AI добави {$added} артикула към поръчката.";
-        if ($missed !== []) {
-            $message .= ' Неразпознати: ' . implode('; ', array_slice($missed, 0, 3));
-        }
-
-        $request->session()->forget($this->getAiPromptDraftSessionKey($userId, $tableId));
-
-        return back()->with('status', $message);
-    }
-
-    private function getAiPromptDraftSessionKey(int $userId, int $tableId): string
-    {
-        return "ai_prompt_draft.user_{$userId}.table_{$tableId}";
-    }
-
-    private function getAiPromptLastSessionKey(int $userId, int $tableId): string
-    {
-        return "ai_prompt_last.user_{$userId}.table_{$tableId}";
-    }
-
-    private function appendOrderItem(int $storeTableId, int $productId, int $quantity, ?int $userId, ?string $metaNote = null): void
-    {
-        $order = DB::table('orders')
-            ->where('store_table_id', $storeTableId)
-            ->where('status', 'open')
-            ->lockForUpdate()
-            ->latest('id')
-            ->first();
-
-        if ($order === null) {
-            $orderId = DB::table('orders')->insertGetId([
-                'store_table_id' => $storeTableId,
-                'user_id' => $userId,
-                'status' => 'open',
-                'total_amount' => 0,
-                'opened_at' => now(),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-        } else {
-            $orderId = (int) $order->id;
-        }
-
-        $product = DB::table('products')->where('id', $productId)->lockForUpdate()->first();
-        if ($product === null || ! $product->is_active) {
-            throw ValidationException::withMessages([
-                'product_id' => 'Избраният продукт е неактивен.',
-            ]);
-        }
-
-        if ((int) $product->stock_quantity < $quantity) {
-            throw ValidationException::withMessages([
-                'quantity' => "Недостатъчна наличност за {$product->name}.",
-            ]);
-        }
-
-        if ($product->category === 'hookah') {
-            $this->consumeHookahTobacco((int) $product->id, $quantity);
-        }
-
-        $unitPrice = (float) $product->price;
-        $lineTotal = $unitPrice * $quantity;
-
-        DB::table('order_items')->insert([
-            'order_id' => $orderId,
-            'product_id' => $productId,
-            'quantity' => $quantity,
-            'item_status' => 'ordered',
-            'unit_price' => $unitPrice,
-            'line_total' => $lineTotal,
-            'meta_note' => $metaNote,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        DB::table('products')
-            ->where('id', $productId)
-            ->update([
-                'stock_quantity' => DB::raw("stock_quantity - {$quantity}"),
-                'updated_at' => now(),
-            ]);
-
-        $this->recalculateOrderTotal($orderId);
-    }
-
-    /**
-     * @return array<int, array{term: string, quantity: int, is_hookah?: bool, hookah_type?: string, hookah_flavors?: string}>
-     */
-    private function parseAiOrderText(string $orderText): array
-    {
-        $preparedOrderText = preg_replace(
-            '/\s+\bи\b\s+(?=(?:\d+|[[:alpha:]\p{L}]+\s+(?:бр|броя|брой)|наргиле|наргилета|hookah|shisha))/ui',
-            ', ',
-            $orderText
-        );
-        $segments = $this->splitOrderSegments((string) $preparedOrderText);
-        $expandedSegments = [];
-        foreach ($segments as $segment) {
-            foreach ($this->expandCompositeOrderSegment((string) $segment) as $part) {
-                $cleanPart = trim((string) $part);
-                if ($cleanPart !== '') {
-                    $expandedSegments[] = $cleanPart;
-                }
-            }
-        }
-        $segments = $expandedSegments;
-        $items = [];
-
-        foreach ($segments as $segment) {
-            $raw = trim((string) $segment);
-            if ($raw === '') {
-                continue;
-            }
-
-            $quantity = 1;
-            $term = $raw;
-
-            if (preg_match('/^\s*(\d+)\s*(?:x|х|бр|броя|брой|pcs|pc)?\s+(.+)$/ui', $raw, $matches) === 1) {
-                $quantity = max(1, (int) $matches[1]);
-                $term = trim((string) $matches[2]);
-            } elseif (preg_match('/^(.+?)\s+(\d+)\s*(?:x|х|бр|броя|брой|pcs|pc)\s*(.*)$/ui', $raw, $matches) === 1) {
-                $quantity = max(1, (int) $matches[2]);
-                $term = trim(trim((string) $matches[1]) . ' ' . trim((string) $matches[3]));
-            } elseif (preg_match('/^\s*([[:alpha:]\p{L}]+)\s*(?:x|х|бр|броя|брой|pcs|pc)?\s+(.+)$/ui', $raw, $matches) === 1) {
-                $wordNumber = $this->parseQuantityWord((string) $matches[1]);
-                if ($wordNumber !== null) {
-                    $quantity = $wordNumber;
-                    $term = trim((string) $matches[2]);
-                }
-            } elseif (preg_match('/^(.+?)\s+(\d+)\s*(?:x|х|бр|броя|брой|pcs|pc)?\s*$/ui', $raw, $matches) === 1) {
-                $term = trim((string) $matches[1]);
-                $quantity = max(1, (int) $matches[2]);
-            } elseif (preg_match('/^(.+?)\s*[xх]\s*(\d+)$/ui', $raw, $matches) === 1) {
-                $term = trim((string) $matches[1]);
-                $quantity = max(1, (int) $matches[2]);
-            } elseif (preg_match('/^(.+?)\s+([[:alpha:]\p{L}]+)\s*(?:x|х|бр|броя|брой|pcs|pc)?\s*$/ui', $raw, $matches) === 1) {
-                $wordNumber = $this->parseQuantityWord((string) $matches[2]);
-                if ($wordNumber !== null) {
-                    $term = trim((string) $matches[1]);
-                    $quantity = $wordNumber;
-                }
-            } elseif (preg_match('/^(.+?)\s+([[:alpha:]\p{L}]+)\s+(?:бр|броя|брой|pcs|pc)\s*$/ui', $raw, $matches) === 1) {
-                $wordNumber = $this->parseQuantityWord((string) $matches[2]);
-                if ($wordNumber !== null) {
-                    $term = trim((string) $matches[1]);
-                    $quantity = $wordNumber;
-                }
-            }
-
-            $isHookahSegment = $this->isHookahKeyword($this->normalizeOrderToken($term));
-            $hookahFlavors = '';
-            if ($isHookahSegment && preg_match('/\(([^)]+)\)/u', $term, $flavorMatches) === 1) {
-                $flavorParts = preg_split('/\s*\+\s*|\s*,\s*|\s+\bи\b\s+|\s+\band\b\s+/ui', (string) $flavorMatches[1]) ?: [];
-                $normalizedFlavors = [];
-                foreach ($flavorParts as $flavorPart) {
-                    $flavorNormalized = $this->normalizeOrderToken((string) $flavorPart);
-                    if ($flavorNormalized !== '') {
-                        $normalizedFlavors[] = $flavorNormalized;
-                    }
-                }
-                $hookahFlavors = implode(' + ', $normalizedFlavors);
-            }
-
-            $termWithoutMeta = (string) preg_replace('/\([^)]*\)/u', ' ', $term);
-            $termWithoutMeta = (string) preg_replace('/\b(чашка|чаша|глава|глави|head|bowl)\b/ui', ' ', $termWithoutMeta);
-            $hookahType = '';
-            if ($isHookahSegment) {
-                $hookahTypeRaw = (string) preg_replace('/\b(наргиле|hookah|shisha|с|със|with)\b/ui', ' ', $termWithoutMeta);
-                $hookahType = $this->normalizeOrderToken($hookahTypeRaw);
-                if ($hookahFlavors === '' && preg_match('/\b(?:с|със|with)\b\s+(.+)$/ui', $term, $flavorFromTextMatch) === 1) {
-                    $flavorParts = preg_split('/\s*\+\s*|\s*,\s*|\s+\bи\b\s+|\s+\band\b\s+/ui', (string) $flavorFromTextMatch[1]) ?: [];
-                    $normalizedFlavors = [];
-                    foreach ($flavorParts as $flavorPart) {
-                        $flavorNormalized = $this->normalizeOrderToken((string) $flavorPart);
-                        if ($flavorNormalized !== '' && $flavorNormalized !== $hookahType && $flavorNormalized !== 'наргиле') {
-                            $normalizedFlavors[] = $flavorNormalized;
-                        }
-                    }
-                    $hookahFlavors = implode(' + ', array_values(array_unique($normalizedFlavors)));
-                }
-            }
-            $normalized = $this->normalizeOrderToken($termWithoutMeta);
-            if ($normalized === '') {
-                continue;
-            }
-
-            $entry = [
-                'term' => $normalized,
-                'quantity' => $quantity,
-            ];
-            if ($isHookahSegment) {
-                $entry['is_hookah'] = true;
-                $entry['hookah_type'] = $hookahType;
-                $entry['hookah_flavors'] = $hookahFlavors;
-            }
-            $items[] = $entry;
-        }
-
-        return $items;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function expandCompositeOrderSegment(string $segment): array
-    {
-        $clean = trim($segment);
-        if ($clean === '') {
-            return [];
-        }
-
-        // Colloquial BG usage: "две коли с една фанта" => two distinct items.
-        $parts = preg_split(
-            '/\s+\bс\b\s+(?=(?:\d+|[[:alpha:]\p{L}]+)\s*(?:бр|броя|брой)?\s+)/ui',
-            $clean
-        ) ?: [];
-
-        $result = [];
-        foreach ($parts as $part) {
-            $value = trim((string) $part);
-            if ($value !== '') {
-                $result[] = $value;
-            }
-        }
-
-        return $result === [] ? [$clean] : $result;
-    }
-
-    private function parseQuantityWord(string $value): ?int
-    {
-        $normalized = $this->normalizeOrderToken($value);
-        $map = [
-            '1' => 1,
-            'един' => 1,
-            'една' => 1,
-            'едно' => 1,
-            'one' => 1,
-            '2' => 2,
-            'два' => 2,
-            'две' => 2,
-            'two' => 2,
-            '3' => 3,
-            'три' => 3,
-            'three' => 3,
-            '4' => 4,
-            'четири' => 4,
-            'four' => 4,
-            '5' => 5,
-            'пет' => 5,
-            'five' => 5,
-            '6' => 6,
-            'шест' => 6,
-            'six' => 6,
-            '7' => 7,
-            'седем' => 7,
-            'seven' => 7,
-            '8' => 8,
-            'осем' => 8,
-            'eight' => 8,
-            '9' => 9,
-            'девет' => 9,
-            'nine' => 9,
-            '10' => 10,
-            'десет' => 10,
-            'ten' => 10,
-        ];
-
-        return $map[$normalized] ?? null;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function splitOrderSegments(string $text): array
-    {
-        $segments = [];
-        $buffer = '';
-        $depth = 0;
-
-        $chars = preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [];
-        foreach ($chars as $char) {
-            if ($char === '(') {
-                $depth++;
-            } elseif ($char === ')' && $depth > 0) {
-                $depth--;
-            }
-
-            $isPlusSeparator = $char === '+' && $depth === 0;
-            if ($isPlusSeparator) {
-                $normalizedBuffer = $this->normalizeOrderToken($buffer);
-                if ($this->isHookahKeyword($normalizedBuffer)) {
-                    $buffer .= ' ' . $char . ' ';
-                    continue;
-                }
-            }
-
-            $isSeparator = ($char === '+' || $char === ',' || $char === ';' || $char === "\n" || $char === "\r") && $depth === 0;
-            if ($isSeparator) {
-                $trimmed = trim($buffer);
-                if ($trimmed !== '') {
-                    $segments[] = $trimmed;
-                }
-                $buffer = '';
-                continue;
-            }
-
-            $buffer .= $char;
-        }
-
-        $trimmed = trim($buffer);
-        if ($trimmed !== '') {
-            $segments[] = $trimmed;
-        }
-
-        return $segments;
-    }
-
-    private function normalizeOrderToken(string $text): string
-    {
-        $value = mb_strtolower(trim($text));
-        $value = str_replace(
-            ['кока-кола', 'кока кола', 'coca cola', 'шиша', 'наргилета', 'фанта', 'мл'],
-            ['coca cola', 'coca cola', 'coca cola', 'наргиле', 'наргиле', 'fanta', 'ml'],
-            $value
-        );
-        $value = str_replace(
-            ['рокетмен', 'блубери', 'блу бери'],
-            ['rocketman', 'blueberry', 'blueberry'],
-            $value
-        );
-        $value = (string) preg_replace('/\b(коли|кола|кока)\b/ui', 'coca cola', $value);
-        $value = str_replace(
-            [' със ', ' с ', ' with '],
-            [' ', ' ', ' '],
-            " {$value} "
-        );
-        $value = (string) preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $value);
-        $value = (string) preg_replace('/\b(вкус|аромат|flavor|taste)\b/ui', ' ', $value);
-        $value = (string) preg_replace('/\s+/u', ' ', $value);
-        return trim($value);
-    }
-
-    private function findBestProductMatch(string $termLower, $products): mixed
-    {
-        $direct = $products
-            ->filter(function ($product) use ($termLower): bool {
-                $productName = $this->normalizeOrderToken((string) $product->name);
-                return str_contains($product->search_text, $termLower)
-                    || str_contains($termLower, $productName)
-                    || str_contains($productName, $termLower);
-            })
-            ->sortByDesc(fn ($product) => mb_strlen((string) $product->search_text))
-            ->first();
-
-        if ($direct !== null) {
-            return $direct;
-        }
-
-        $queryTokens = $this->extractMatchTokens($termLower);
-        if ($queryTokens === []) {
-            return null;
-        }
-
-        $best = null;
-        $bestScore = 0.0;
-
-        foreach ($products as $product) {
-            $productTokens = $this->extractMatchTokens((string) $product->search_text);
-            if ($productTokens === []) {
-                continue;
-            }
-
-            $common = array_intersect($queryTokens, $productTokens);
-            if ($common === []) {
-                continue;
-            }
-
-            $score = count($common) / max(1, count($queryTokens));
-            if ($score > $bestScore) {
-                $bestScore = $score;
-                $best = $product;
-            }
-        }
-
-        return $bestScore >= 0.5 ? $best : null;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function extractMatchTokens(string $text): array
-    {
-        $normalized = $this->normalizeOrderToken($text);
-        $parts = preg_split('/\s+/u', $normalized) ?: [];
-        $tokens = [];
-
-        foreach ($parts as $part) {
-            $token = trim((string) $part);
-            if ($token === '') {
-                continue;
-            }
-
-            if (in_array($token, ['бр', 'броя', 'брой', 'pc', 'pcs', 'x', 'х', 'и', 'and', 'с', 'със', 'with'], true)) {
-                continue;
-            }
-
-            if (preg_match('/^\d+$/', $token) === 1) {
-                continue;
-            }
-
-            $tokens[] = $token;
-        }
-
-        return array_values(array_unique($tokens));
-    }
-
-    private function isHookahKeyword(string $text): bool
-    {
-        return str_contains($text, 'наргиле')
-            || str_contains($text, 'hookah')
-            || str_contains($text, 'shisha');
-    }
-
-    private function normalizeHookahTypeToken(string $text): string
-    {
-        $value = $this->normalizeOrderToken($text);
-        $value = str_replace(
-            ['карма', 'aeon', 'аеон', 'маклауд', 'механика'],
-            ['karm', 'aoen', 'aoen', 'maklaud', 'mechanica'],
-            $value
-        );
-        return $value;
-    }
-
-    /**
-     * @return array{value: string, unknown: array<int, string>}
-     */
-    private function resolveHookahFlavors(string $flavors, $products): array
-    {
-        $parts = preg_split('/\s*\+\s*/u', $flavors) ?: [];
-        if ($parts === []) {
-            return ['value' => '', 'unknown' => []];
-        }
-
-        $candidates = $products
-            ->where('category', 'tobacco')
-            ->map(fn ($product) => $this->normalizeOrderToken((string) $product->name))
-            ->filter(fn ($name) => $name !== '')
-            ->unique()
-            ->values();
-
-        if ($candidates->isEmpty()) {
-            return [
-                'value' => $this->normalizeOrderToken($flavors),
-                'unknown' => array_values(array_filter(array_map(
-                    fn ($part) => $this->normalizeOrderToken((string) $part),
-                    $parts
-                ))),
-            ];
-        }
-
-        $corrected = [];
-        $unknown = [];
-        foreach ($parts as $part) {
-            $token = $this->normalizeOrderToken((string) $part);
-            if ($token === '') {
-                continue;
-            }
-
-            $best = null;
-            $bestDistance = PHP_INT_MAX;
-            $tokenCompact = str_replace(' ', '', $token);
-
-            foreach ($candidates as $candidate) {
-                $candidateString = (string) $candidate;
-                if ($candidateString === $token) {
-                    $best = $candidateString;
-                    $bestDistance = 0;
-                    break;
-                }
-
-                if (str_contains($candidateString, $token) || str_contains($token, $candidateString)) {
-                    $best = $candidateString;
-                    $bestDistance = 0;
-                    break;
-                }
-
-                $candidateCompact = str_replace(' ', '', $candidateString);
-                $distance = levenshtein($tokenCompact, $candidateCompact);
-                $threshold = max(1, (int) floor(strlen($candidateCompact) * 0.35));
-
-                if ($distance <= $threshold && $distance < $bestDistance) {
-                    $bestDistance = $distance;
-                    $best = $candidateString;
-                }
-            }
-
-            if ($best === null) {
-                $unknown[] = $token;
-                continue;
-            }
-
-            $corrected[] = $best;
-        }
-
-        return [
-            'value' => implode(' + ', array_values(array_unique($corrected))),
-            'unknown' => array_values(array_unique($unknown)),
-        ];
-    }
-
-    private function consumeHookahTobacco(int $hookahProductId, int $quantity): void
-    {
-        $recipes = DB::table('hookah_recipes')
-            ->where('hookah_product_id', $hookahProductId)
-            ->lockForUpdate()
-            ->get();
-
-        foreach ($recipes as $recipe) {
-            $gramsNeeded = (float) $recipe->grams_per_serving * $quantity;
-            $gramsNeededInt = (int) ceil($gramsNeeded);
-            if ($gramsNeededInt < 1) {
-                continue;
-            }
-
-            $tobacco = DB::table('products')
-                ->where('id', $recipe->tobacco_product_id)
-                ->lockForUpdate()
-                ->first();
-
-            if ($tobacco === null || ! $tobacco->is_active) {
-                throw ValidationException::withMessages([
-                    'order_text' => 'Рецептата за наргиле съдържа неактивен тютюн.',
-                ]);
-            }
-
-            if ((int) $tobacco->stock_quantity < $gramsNeededInt) {
-                throw ValidationException::withMessages([
-                    'order_text' => "Недостатъчен тютюн за наргиле: {$tobacco->name}.",
-                ]);
-            }
-
-            DB::table('products')
-                ->where('id', $tobacco->id)
-                ->update([
-                    'stock_quantity' => DB::raw("stock_quantity - {$gramsNeededInt}"),
-                    'updated_at' => now(),
-                ]);
-        }
-    }
-
-    private function restoreHookahTobacco(int $hookahProductId, int $quantity): void
-    {
-        if ($quantity < 1) {
-            return;
-        }
-
-        $recipes = DB::table('hookah_recipes')
-            ->where('hookah_product_id', $hookahProductId)
-            ->lockForUpdate()
-            ->get();
-
-        foreach ($recipes as $recipe) {
-            $gramsNeeded = (float) $recipe->grams_per_serving * $quantity;
-            $gramsNeededInt = (int) ceil($gramsNeeded);
-            if ($gramsNeededInt < 1) {
-                continue;
-            }
-
-            DB::table('products')
-                ->where('id', $recipe->tobacco_product_id)
-                ->update([
-                    'stock_quantity' => DB::raw("stock_quantity + {$gramsNeededInt}"),
-                    'updated_at' => now(),
-                ]);
-        }
-    }
-
-    private function recalculateOrderTotal(int $orderId): void
-    {
-        $newTotal = (float) DB::table('order_items')
-            ->where('order_id', $orderId)
-            ->sum('line_total');
-
-        DB::table('orders')
-            ->where('id', $orderId)
-            ->update([
-                'total_amount' => $newTotal,
-                'updated_at' => now(),
-            ]);
-    }
-
     public function closeOrder(Request $request): RedirectResponse
     {
         $validated = $request->validate([
             'store_table_id' => ['required', 'integer', 'exists:store_tables,id'],
         ]);
 
-        $order = DB::table('orders')
-            ->where('store_table_id', $validated['store_table_id'])
-            ->where('status', 'open')
-            ->latest('id')
-            ->first();
-
-        if ($order === null) {
-            return back()->with('error', 'Няма отворена поръчка за тази маса.');
-        }
-
-        DB::transaction(function () use ($order): void {
-            $hookahItems = DB::table('order_items')
-                ->join('products', 'order_items.product_id', '=', 'products.id')
-                ->where('order_items.order_id', $order->id)
-                ->where('products.category', 'hookah')
-                ->select(
-                    'order_items.product_id',
-                    DB::raw('SUM(order_items.quantity) as total_quantity')
-                )
-                ->groupBy('order_items.product_id')
-                ->get();
-
-            foreach ($hookahItems as $hookahItem) {
-                $qty = max(0, (int) $hookahItem->total_quantity);
-                if ($qty > 0) {
-                    DB::table('products')
-                        ->where('id', $hookahItem->product_id)
-                        ->lockForUpdate()
-                        ->update([
-                            'stock_quantity' => DB::raw("stock_quantity + {$qty}"),
-                            'updated_at' => now(),
-                        ]);
-                }
-            }
-
-            DB::table('orders')
-                ->where('id', $order->id)
-                ->update([
-                    'status' => 'paid',
-                    'closed_at' => now(),
-                    'updated_at' => now(),
-                ]);
-        });
+        $this->orderService->closeOrderForTable((int) $validated['store_table_id']);
 
         return back()->with('status', 'Сметката е маркирана и поръчката е затворена.');
     }
